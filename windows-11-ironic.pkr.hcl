@@ -108,13 +108,24 @@ variable "vendor_drivers_dir" {
 
 variable "virtio_win_guest_tools_url" {
   type        = string
-  default     = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win-guest-tools.exe"
+  default     = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-guest-tools.exe"
   description = "virtio-win guest tools installer. Set to \"\" to skip (not needed for bare metal only)."
+}
+
+variable "virtio_win_guest_tools_sha256" {
+  type        = string
+  default     = "d8ae9ea1e943384ac195e012cd36f82c3161620e5fc9529be4e42e6f420e222d"
+  description = "SHA-256 of virtio_win_guest_tools_url. The installer is not Authenticode-signed."
 }
 
 variable "cloudbase_init_url" {
   type    = string
-  default = "https://cloudbase.it/downloads/CloudbaseInitSetup_Stable_x64.msi"
+  default = "https://cloudbase.it/downloads/CloudbaseInitSetup_1_1_8_x64.msi"
+}
+
+variable "cloudbase_init_sha256" {
+  type    = string
+  default = "0e7fa42e0cbc0ce7657f85730b0c6cc7afc4087a3639df0ff51a721a0be19bd5"
 }
 
 variable "cloudbase_init_username" {
@@ -145,7 +156,8 @@ locals {
   # vendor drivers. Scripts locate the CD by this label.
   cd_label = "PACKERCD"
 
-  vendor_drivers_dir = var.vendor_drivers_dir != "" ? var.vendor_drivers_dir : "${path.root}/drivers/vendor-drivers"
+  # Absolute: Packer's cd_files mishandles directories given as "./dir".
+  vendor_drivers_dir = abspath(var.vendor_drivers_dir != "" ? var.vendor_drivers_dir : "${path.root}/drivers/vendor-drivers")
 
   cloudbase_init_dir = "C:\\Program Files\\Cloudbase Solutions\\Cloudbase-Init"
 
@@ -258,8 +270,11 @@ build {
   }
 
   provisioner "powershell" {
-    environment_vars = ["VIRTIO_WIN_GUEST_TOOLS_URL=${var.virtio_win_guest_tools_url}"]
-    script           = "${path.root}/scripts/install-virtio.ps1"
+    environment_vars = [
+      "VIRTIO_WIN_GUEST_TOOLS_URL=${var.virtio_win_guest_tools_url}",
+      "VIRTIO_WIN_GUEST_TOOLS_SHA256=${var.virtio_win_guest_tools_sha256}",
+    ]
+    script = "${path.root}/scripts/install-virtio.ps1"
   }
 
   provisioner "powershell" {
@@ -276,6 +291,7 @@ build {
   provisioner "powershell" {
     environment_vars = [
       "CLOUDBASE_INIT_URL=${var.cloudbase_init_url}",
+      "CLOUDBASE_INIT_SHA256=${var.cloudbase_init_sha256}",
       "CLOUDBASE_INIT_USERNAME=${var.cloudbase_init_username}",
     ]
     script = "${path.root}/scripts/install-cloudbase-init.ps1"

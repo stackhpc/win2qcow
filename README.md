@@ -27,7 +27,9 @@ sudo dnf install qemu-kvm edk2-ovmf xorriso
 
 You also need Packer 1.10+ (`packer init` fetches the QEMU plugin), access to
 `/dev/kvm`, and outbound internet from the build VM to download virtio-win and
-cloudbase-init. Allow about 50 GB of free disk: the working image and the
+cloudbase-init. Both downloads are pinned versions verified by SHA-256
+(`virtio_win_guest_tools_url`/`_sha256`, `cloudbase_init_url`/`_sha256`).
+Allow about 50 GB of free disk: the working image and the
 compressed copy exist side by side while Packer converts it.
 
 ## Build
@@ -69,13 +71,15 @@ can reach it while the build runs.
    has inbox drivers for both, so nothing is injected into WinPE.
 2. Windows Setup reads `autounattend.xml` from a generated CD (label
    `PACKERCD`). It skips the Windows 11 TPM/Secure Boot/CPU checks for the
-   build VM, partitions the disk as GPT (ESP, MSR, C:), and logs on as
-   Administrator.
+   build VM and partitions the disk as GPT: ESP, MSR, a 1 GB WinRE partition,
+   then C: taking the rest. C: is last so it can be extended on deploy;
+   without the WinRE partition, Setup shrinks C: to create one after it.
+   Setup then logs on as Administrator.
 3. On first logon, `setup-winrm.ps1` runs from the CD and Packer connects over
    WinRM.
 4. Provisioners then, in order:
    * Configure Windows: RDP with NLA, high-performance power plan, no
-     hibernation, BitLocker auto-encryption blocked.
+     hibernation, BitLocker auto-encryption blocked, Smart App Control off.
    * Install virtio-win guest tools.
    * Stage the vendor drivers in the driver store.
    * Reboot.
@@ -217,9 +221,14 @@ console.
   is the English group name. Change it to the localised name (for example
   `Administratoren`) for other languages.
 * **SSH keys** are not applied: OpenSSH Server isn't installed.
-* **Untested specialize step.** Creating the user in the specialize pass is
-  not in upstream cloudbase-init's default unattend config. Verify it on a
-  test deploy.
+* **Profile error in specialize.** cloudbase-init creates `Admin` in the
+  specialize pass, before Windows can load user profiles, so
+  `cloudbase-init-unattend.log` shows a `LoadUserProfile` "device is not
+  ready" error. It's harmless: the user and password are set, and the
+  profile is created at first logon.
+* **Smart App Control** is turned off in the image. It starts in evaluation
+  mode and can switch itself on and block unsigned code, such as user-data
+  scripts. It can only be re-enabled by reinstalling Windows.
 
 If the build hangs at sysprep, check
 `C:\Windows\System32\Sysprep\Panther\setuperr.log` in the VM.

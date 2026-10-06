@@ -33,10 +33,12 @@ Start-Transcript -Path "$env:SystemRoot\Temp\sysprep-wrapper.log" -Append
 $cloudbase = "$env:ProgramFiles\Cloudbase Solutions\Cloudbase-Init"
 
 # Windows 11 sysprep fails if an AppX package is installed for a user but not
-# provisioned for all users. Remove only such packages.
+# provisioned for all users. Remove only such packages, never frameworks: the
+# shell depends on some (e.g. WindowsAppRuntime), and removing them makes
+# Explorer crash for every new user, which fails OOBE on deployed nodes.
 $provisioned = Get-AppxProvisionedPackage -Online | Select-Object -ExpandProperty DisplayName
 Get-AppxPackage -AllUsers |
-  Where-Object { -not $_.NonRemovable -and $_.SignatureKind -ne 'System' -and $_.Name -notin $provisioned } |
+  Where-Object { -not $_.IsFramework -and -not $_.NonRemovable -and $_.SignatureKind -ne 'System' -and $_.Name -notin $provisioned } |
   ForEach-Object {
     Write-Host "Removing per-user AppX package $($_.PackageFullName)"
     try { Remove-AppxPackage -Package $_.PackageFullName -AllUsers -ErrorAction Stop } catch { Write-Warning $_ }
