@@ -4,6 +4,7 @@
 
 [DEFAULT]
 username=${username}
+# Localised group name: change it for non-English ISOs (e.g. Administratoren).
 groups=Administrators
 inject_user_password=true
 

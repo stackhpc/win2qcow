@@ -18,7 +18,8 @@ if ($p.ExitCode -notin 0, 3010) {
 }
 Remove-Item $msi
 
-# The service must start automatically on the deployed node, but must not run
-# during the build (it would record plugin state into the image).
+# Manual during the build (it would record plugin state into the image) and
+# through specialize/OOBE on the deployed node, where cloudbase-init already
+# runs from the sysprep answer file. SetupComplete.cmd switches it to Automatic.
 Stop-Service -Name cloudbase-init -ErrorAction SilentlyContinue
-Set-Service -Name cloudbase-init -StartupType Automatic
+Set-Service -Name cloudbase-init -StartupType Manual

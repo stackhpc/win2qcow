@@ -1,5 +1,8 @@
-# Adds every *.inf on the build CD (from vendor_drivers_dir) to the driver
+# Stages every *.inf on the build CD (from vendor_drivers_dir) in the driver
 # store, so the bare-metal NIC and storage controller work after deploy.
+# Drivers are staged, not installed: they are for hardware the build VM does
+# not have, and installing one against a matching emulated device (e.g. an
+# Intel chipset INF against QEMU's ICH9) could break the build VM.
 $ErrorActionPreference = 'Stop'
 
 $cd = Get-Volume | Where-Object { $_.FileSystemLabel -eq $env:CD_LABEL -and $_.DriveLetter } |
@@ -17,10 +20,9 @@ if (-not $infs) {
 $failed = @()
 foreach ($inf in $infs) {
   Write-Host "Adding $($inf.FullName)"
-  & pnputil.exe /add-driver $inf.FullName /install
-  # 259: staged, but no matching device in the build VM (expected for bare-metal drivers).
+  & pnputil.exe /add-driver $inf.FullName
   # 3010: reboot required; the build reboots after this step.
-  if ($LASTEXITCODE -notin 0, 259, 3010) {
+  if ($LASTEXITCODE -notin 0, 3010) {
     $failed += "$($inf.FullName) (exit $LASTEXITCODE)"
   }
 }

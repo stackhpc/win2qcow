@@ -1,7 +1,8 @@
 packer {
   required_plugins {
     qemu = {
-      version = ">= 1.1.0"
+      # shutdown_command behaviour depends on the plugin/SDK version; see sysprep.ps1.
+      version = "~> 1.1.7"
       source  = "github.com/hashicorp/qemu"
     }
   }
@@ -32,14 +33,13 @@ variable "product_key" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "Product key for setup. Leave empty for evaluation media; use the KMS GVLK for volume media."
+  description = "Product key for setup. Empty: none for evaluation images, otherwise the public Windows 11 Enterprise KMS client key (GVLK)."
 }
 
 variable "build_password" {
   type        = string
-  default     = "Packer-Build-0nly!"
   sensitive   = true
-  description = "Built-in Administrator password, used only by WinRM during the build. Randomised and disabled on first boot of a deployed node."
+  description = "Built-in Administrator password, used only by WinRM during the build. Randomised before sysprep. Set per build, e.g. PKR_VAR_build_password."
 }
 
 variable "ui_language" {
@@ -102,8 +102,8 @@ variable "efi_firmware_vars" {
 
 variable "vendor_drivers_dir" {
   type        = string
-  default     = "drivers/vendor-drivers"
-  description = "Directory of extracted vendor drivers (*.inf trees) for the bare-metal hardware. Shipped to the VM on the build CD."
+  default     = ""
+  description = "Directory of extracted vendor drivers (*.inf trees) for the bare-metal hardware, shipped to the VM on the build CD. Empty: drivers/vendor-drivers in this repo."
 }
 
 variable "virtio_win_guest_tools_url" {
@@ -145,7 +145,14 @@ locals {
   # vendor drivers. Scripts locate the CD by this label.
   cd_label = "PACKERCD"
 
+  vendor_drivers_dir = var.vendor_drivers_dir != "" ? var.vendor_drivers_dir : "${path.root}/drivers/vendor-drivers"
+
   cloudbase_init_dir = "C:\\Program Files\\Cloudbase Solutions\\Cloudbase-Init"
+
+  # Without a key, Setup stops at the product key page on non-evaluation media.
+  windows_11_enterprise_gvlk = "NPPR9-FWDCX-D2C8J-H872K-2YT43"
+  product_key = (var.product_key != "" ? var.product_key :
+  strcontains(var.image_name, "Evaluation") ? "" : local.windows_11_enterprise_gvlk)
 
   # Values substituted into XML must be escaped.
   xml_build_password = replace(replace(replace(var.build_password, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
@@ -196,16 +203,22 @@ source "qemu" "windows-11-ironic" {
   # OVMF goes straight to the install CD instead of trying network boot first.
   net_device = "e1000e,romfile="
 
+  # Same as the plugin's default netdev, but the WinRM port forward listens on
+  # 127.0.0.1 only rather than on every host interface.
+  qemuargs = [
+    ["-netdev", "user,id=user.0,hostfwd=tcp:127.0.0.1:{{ .SSHHostPort }}-:5985"],
+  ]
+
   # Windows Setup picks up autounattend.xml from the root of any CD.
   cd_label = local.cd_label
   cd_files = [
-    "scripts/setup-winrm.ps1",
-    var.vendor_drivers_dir,
+    "${path.root}/scripts/setup-winrm.ps1",
+    local.vendor_drivers_dir,
   ]
   cd_content = {
-    "autounattend.xml" = templatefile("templates/autounattend.xml.pkrtpl", merge(local.locale, {
+    "autounattend.xml" = templatefile("${path.root}/templates/autounattend.xml.pkrtpl", merge(local.locale, {
       image_name     = var.image_name
-      product_key    = var.product_key
+      product_key    = local.product_key
       admin_password = local.xml_build_password
     }))
   }
@@ -224,9 +237,13 @@ source "qemu" "windows-11-ironic" {
   winrm_use_ssl  = false
   winrm_insecure = true
 
-  # sysprep.ps1 is uploaded by the last provisioner. It starts sysprep in the
-  # background and returns; sysprep powers the VM off when done.
-  shutdown_command = "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\sysprep.ps1"
+  # sysprep.ps1 is uploaded by the last provisioner. It hands sysprep to a
+  # scheduled task (outside the WinRM shell) and returns; sysprep powers the VM
+  # off when done.
+  shutdown_command = join(" ", compact([
+    "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\sysprep.ps1",
+    lower(var.cloudbase_init_username) != "administrator" ? "-DisableBuiltinAdmin" : "",
+  ]))
   shutdown_timeout = "1h"
 
   output_directory = var.output_directory
@@ -237,17 +254,17 @@ build {
   sources = ["source.qemu.windows-11-ironic"]
 
   provisioner "powershell" {
-    script = "scripts/configure-windows.ps1"
+    script = "${path.root}/scripts/configure-windows.ps1"
   }
 
   provisioner "powershell" {
     environment_vars = ["VIRTIO_WIN_GUEST_TOOLS_URL=${var.virtio_win_guest_tools_url}"]
-    script           = "scripts/install-virtio.ps1"
+    script           = "${path.root}/scripts/install-virtio.ps1"
   }
 
   provisioner "powershell" {
     environment_vars = ["CD_LABEL=${local.cd_label}"]
-    script           = "scripts/install-vendor-drivers.ps1"
+    script           = "${path.root}/scripts/install-vendor-drivers.ps1"
   }
 
   provisioner "windows-restart" {
@@ -261,46 +278,38 @@ build {
       "CLOUDBASE_INIT_URL=${var.cloudbase_init_url}",
       "CLOUDBASE_INIT_USERNAME=${var.cloudbase_init_username}",
     ]
-    script = "scripts/install-cloudbase-init.ps1"
+    script = "${path.root}/scripts/install-cloudbase-init.ps1"
   }
 
   provisioner "file" {
-    content     = templatefile("templates/cloudbase-init.conf.pkrtpl", local.cloudbase_init_conf_vars)
+    content     = templatefile("${path.root}/templates/cloudbase-init.conf.pkrtpl", local.cloudbase_init_conf_vars)
     destination = "${local.cloudbase_init_dir}\\conf\\cloudbase-init.conf"
   }
 
   provisioner "file" {
-    content     = templatefile("templates/cloudbase-init-unattend.conf.pkrtpl", local.cloudbase_init_conf_vars)
+    content     = templatefile("${path.root}/templates/cloudbase-init-unattend.conf.pkrtpl", local.cloudbase_init_conf_vars)
     destination = "${local.cloudbase_init_dir}\\conf\\cloudbase-init-unattend.conf"
   }
 
   provisioner "file" {
-    content = templatefile("templates/sysprep-unattend.xml.pkrtpl", merge(local.locale, {
+    content = templatefile("${path.root}/templates/sysprep-unattend.xml.pkrtpl", merge(local.locale, {
       install_dir = local.cloudbase_init_dir
     }))
     destination = "${local.cloudbase_init_dir}\\conf\\Unattend.xml"
   }
 
-  # Runs once on the deployed node after OOBE: removes build-time WinRM access
-  # and disables the built-in Administrator.
+  # Runs once on the deployed node after OOBE: enables the cloudbase-init service.
   provisioner "file" {
-    source      = "files/SetupComplete.cmd"
+    source      = "${path.root}/files/SetupComplete.cmd"
     destination = "C:\\Windows\\Setup\\Scripts\\SetupComplete.cmd"
   }
 
-  provisioner "file" {
-    content = templatefile("templates/post-deploy.ps1.pkrtpl", {
-      disable_builtin_admin = lower(var.cloudbase_init_username) != "administrator"
-    })
-    destination = "C:\\Windows\\Setup\\Scripts\\post-deploy.ps1"
-  }
-
   provisioner "powershell" {
-    script = "scripts/cleanup.ps1"
+    script = "${path.root}/scripts/cleanup.ps1"
   }
 
   provisioner "file" {
-    source      = "scripts/sysprep.ps1"
+    source      = "${path.root}/scripts/sysprep.ps1"
     destination = "C:\\Windows\\Temp\\sysprep.ps1"
   }
 }

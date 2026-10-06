@@ -15,10 +15,18 @@
     </component>
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
-        <!-- Hostname, user creation and volume extension from the Ironic config drive.
-             Exit code 1 asks Setup to reboot so the new hostname applies. -->
+        <!-- Remove the scheduled task and script that ran sysprep during the build. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
+          <Path>cmd.exe /c "schtasks /delete /tn packer-sysprep /f &amp; del /q %WINDIR%\Temp\sysprep.ps1 &amp; exit 0"</Path>
+          <Description>Remove build-time sysprep task</Description>
+        </RunSynchronousCommand>
+        <!-- Hostname, user creation and volume extension from the Ironic config drive.
+             Exit code 1 asks Setup to reboot so the new hostname applies.
+             The user created here is the only enabled admin account, so the
+             node must have a config drive (or metadata service) at first boot. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
           <Path>cmd.exe /c ""${install_dir}\Python\Scripts\cloudbase-init.exe" --config-file "${install_dir}\conf\cloudbase-init-unattend.conf" &amp;&amp; exit 1 || exit 2"</Path>
           <Description>Run cloudbase-init (unattend stage)</Description>
           <WillReboot>OnRequest</WillReboot>

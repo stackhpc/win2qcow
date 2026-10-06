@@ -1,6 +1,6 @@
 # Enables WinRM over HTTP so Packer can connect. Runs from the build CD at
-# first logon (see autounattend.xml). post-deploy.ps1 undoes this on deployed
-# nodes.
+# first logon (see autounattend.xml). sysprep.ps1 undoes this before the image
+# is generalized.
 $ErrorActionPreference = 'Stop'
 Start-Transcript -Path "$env:SystemRoot\Temp\setup-winrm.log" -Append
 

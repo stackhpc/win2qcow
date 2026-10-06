@@ -3,9 +3,12 @@
 
 [DEFAULT]
 username=${username}
+# Localised group name: change it for non-English ISOs (e.g. Administratoren).
 groups=Administrators
 inject_user_password=true
-first_logon_behaviour=clear_text_injected_only
+# "no": the default forces a password change at first logon, which RDP with
+# Network Level Authentication and WinRM cannot complete.
+first_logon_behaviour=no
 
 # Ironic writes the config drive to a partition at the end of the disk; fall
 # back to the OpenStack metadata service if the deployment provides one.
@@ -17,7 +20,6 @@ plugins=cloudbaseinit.plugins.common.mtu.MTUPlugin,
         cloudbaseinit.plugins.windows.createuser.CreateUserPlugin,
         cloudbaseinit.plugins.common.networkconfig.NetworkConfigPlugin,
         cloudbaseinit.plugins.windows.licensing.WindowsLicensingPlugin,
-        cloudbaseinit.plugins.common.sshpublickeys.SetUserSSHPublicKeysPlugin,
         cloudbaseinit.plugins.windows.extendvolumes.ExtendVolumesPlugin,
         cloudbaseinit.plugins.common.setuserpassword.SetUserPasswordPlugin,
         cloudbaseinit.plugins.windows.winrmlistener.ConfigWinRMListenerPlugin,

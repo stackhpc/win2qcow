@@ -1,4 +1,6 @@
 @echo off
 rem Run by Windows Setup once, after OOBE, on the deployed node.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%WINDIR%\Setup\Scripts\post-deploy.ps1"
-del /q "%WINDIR%\Setup\Scripts\post-deploy.ps1"
+rem cloudbase-init stays on Manual until now so the service cannot run
+rem alongside the specialize-pass cloudbase-init (same as the upstream MSI).
+sc config cloudbase-init start= auto
+net start cloudbase-init

@@ -19,5 +19,5 @@ Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\BitLocker' `
 & powercfg.exe /change monitor-timeout-ac 0
 & powercfg.exe /hibernate off
 
-# Where the file provisioners put SetupComplete.cmd and post-deploy.ps1.
+# Where the file provisioner puts SetupComplete.cmd.
 New-Item -Path "$env:SystemRoot\Setup\Scripts" -ItemType Directory -Force | Out-Null
