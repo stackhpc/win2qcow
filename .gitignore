@@ -1,0 +1,5 @@
+# Packer build output and caches
+output-*/
+packer_cache/
+crash.log
+*.auto.pkrvars.hcl

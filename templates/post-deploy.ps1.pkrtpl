@@ -1,0 +1,23 @@
+# Runs once via SetupComplete.cmd on the deployed node, as SYSTEM, after OOBE.
+# Removes access that only existed for the Packer build. Rendered by Packer.
+
+Start-Transcript -Path "$env:SystemRoot\Temp\post-deploy.log" -Append
+
+# Build-time WinRM: plain HTTP listener, unencrypted traffic, firewall rule.
+# cloudbase-init's ConfigWinRMListenerPlugin sets up an HTTPS listener instead.
+Remove-NetFirewallRule -Name 'packer-winrm-http' -ErrorAction SilentlyContinue
+Get-ChildItem WSMan:\localhost\Listener |
+  Where-Object { $_.Keys -contains 'Transport=HTTP' } |
+  Remove-Item -Recurse -Force
+Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $false
+
+%{ if disable_builtin_admin ~}
+# The built-in Administrator still has the build password: randomise and disable it.
+$admin = Get-LocalUser | Where-Object { $_.SID.Value -like 'S-1-5-21-*-500' }
+$chars = [char[]](33..126)
+$password = -join (1..32 | ForEach-Object { $chars | Get-Random })
+$admin | Set-LocalUser -Password (ConvertTo-SecureString $password -AsPlainText -Force)
+$admin | Disable-LocalUser
+%{ endif ~}
+
+Stop-Transcript
