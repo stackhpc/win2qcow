@@ -1,6 +1,7 @@
 # cloudbase-init configuration for the sysprep specialize pass (runs once,
-# before OOBE). Creating the user here gives OOBE an account so it does not
-# prompt for one. Rendered by Packer.
+# before OOBE). Creates the user and extends C:. The hostname is left to the
+# service (cloudbase-init.conf): Windows 11 OOBE would overwrite it.
+# Rendered by Packer.
 
 [DEFAULT]
 username=${username}
@@ -11,7 +12,6 @@ inject_user_password=true
 metadata_services=cloudbaseinit.metadata.services.configdrive.ConfigDriveService,cloudbaseinit.metadata.services.httpservice.HttpService
 
 plugins=cloudbaseinit.plugins.common.mtu.MTUPlugin,
-        cloudbaseinit.plugins.common.sethostname.SetHostNamePlugin,
         cloudbaseinit.plugins.windows.createuser.CreateUserPlugin,
         cloudbaseinit.plugins.windows.extendvolumes.ExtendVolumesPlugin
 

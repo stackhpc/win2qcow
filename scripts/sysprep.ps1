@@ -56,9 +56,10 @@ $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '0'
 Remove-ItemProperty -Path $winlogon -Name DefaultPassword, AutoLogonCount -ErrorAction SilentlyContinue
 
-# Cached copies of the build answer file.
-Remove-Item -Path "$env:SystemRoot\Panther\unattend.xml", "$env:SystemRoot\Panther\Unattend" `
-  -Recurse -Force -ErrorAction SilentlyContinue
+# Cached copies of the build answer file, which hold the build password in
+# plain text (unattend-original.xml is Setup's untouched copy).
+Remove-Item -Path "$env:SystemRoot\Panther\unattend.xml", "$env:SystemRoot\Panther\unattend-original.xml", `
+  "$env:SystemRoot\Panther\Unattend" -Recurse -Force -ErrorAction SilentlyContinue
 
 # Build-time WinRM: HTTP listener, Basic auth, unencrypted traffic and the
 # firewall rules opened by setup-winrm.ps1 / Enable-PSRemoting. Packer's

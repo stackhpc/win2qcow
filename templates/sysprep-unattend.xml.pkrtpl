@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Answer file used by sysprep. Runs on the deployed Ironic node.
-     Replaces the Unattend.xml shipped with cloudbase-init, which relies on
-     SkipMachineOOBE and so stalls at the Windows 11 account/region screens. -->
+     Replaces the Unattend.xml shipped with cloudbase-init, which keeps the
+     device drivers of the build VM and leaves the locale screens to OOBE. -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <settings pass="generalize">
     <component name="Microsoft-Windows-PnpSysprep" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -21,10 +21,11 @@
           <Path>cmd.exe /c "schtasks /delete /tn packer-sysprep /f &amp; del /q %WINDIR%\Temp\sysprep.ps1 &amp; exit 0"</Path>
           <Description>Remove build-time sysprep task</Description>
         </RunSynchronousCommand>
-        <!-- Hostname, user creation and volume extension from the Ironic config drive.
-             Exit code 1 asks Setup to reboot so the new hostname applies.
+        <!-- User creation and volume extension from the Ironic config drive.
              The user created here is the only enabled admin account, so the
-             node must have a config drive (or metadata service) at first boot. -->
+             node must have a config drive (or metadata service) at first boot.
+             The hostname is set later by the cloudbase-init service: Windows 11
+             OOBE replaces any name set here with a random DESKTOP-xxxx one. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
           <Path>cmd.exe /c ""${install_dir}\Python\Scripts\cloudbase-init.exe" --config-file "${install_dir}\conf\cloudbase-init-unattend.conf" &amp;&amp; exit 1 || exit 2"</Path>
@@ -49,6 +50,12 @@
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
         <ProtectYourPC>3</ProtectYourPC>
+        <!-- Deprecated, but still honoured by Windows 11 25H2. Without them OOBE
+             decides an account is still needed, logs on its temporary
+             defaultuser0 account for user OOBE, Explorer crashes there and
+             Windows restarts into "Why did my PC restart?". -->
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
       </OOBE>
     </component>
   </settings>
