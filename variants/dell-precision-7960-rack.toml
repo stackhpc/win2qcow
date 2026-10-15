@@ -1,0 +1,30 @@
+# Dell Precision 7960 Rack: 2U workstation with an iDRAC, so Ironic can drive
+# it with the idrac or redfish hardware type. Dell supports Windows 11 on it
+# and publishes a per-model Windows 11 driver pack; only the network, storage
+# and chipset folders are used (the pack is mostly GPU drivers).
+#
+# Find newer packs in https://downloads.dell.com/catalog/DriverPackCatalog.cab
+# (see "Adding vendor drivers" in the README).
+
+[variant]
+name = "dell-precision-7960-rack"
+description = "Dell Precision 7960 Rack: onboard and Intel add-in NICs, Intel VROC/RST storage, chipset."
+manufacturer = "Dell Inc."
+product_name = "Precision 7960 Rack"
+
+[[packages]]
+id = "driver-pack"
+description = "Dell Windows 11 driver pack DVXGJ A09: network, storage and chipset folders"
+url = "https://downloads.dell.com/FOLDER14214605M/1/Precision-7960-Rack-DVXGJ_Win11_1.0_A09.exe"
+sha256 = "637b463754deaa8b8f456ffb0d3a4ac5eac2e90d96f3d80403881a4a04c39456"
+include = ["*/Win11/x64/network/*", "*/Win11/x64/storage/*", "*/Win11/x64/chipset/*"]
+
+[[devices]]
+name = "Intel I210 1GbE"
+ids = ["PCI\\VEN_8086&DEV_1533"]
+[[devices]]
+name = "Intel VROC (NVMe RAID)"
+ids = ["PCI\\VEN_8086&DEV_201D"]
+[[devices]]
+name = "NVMe drives"
+ids = ["PCI\\CC_010802"]

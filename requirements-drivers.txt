@@ -1,0 +1,3 @@
+# For scripts/drivers.py: unpacks MSI-wrapped vendor drivers (Mellanox, Intel
+# chipset, Marvell, Emulex). https://github.com/nightlark/pymsi
+pymsi==0.0.0rc1

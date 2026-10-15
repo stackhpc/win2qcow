@@ -14,7 +14,10 @@ templates/cloudbase-init*.conf.pkrtpl  cloudbase-init config (service and specia
 files/SetupComplete.cmd                Enables the cloudbase-init service after OOBE
 scripts/setup-winrm.ps1                First logon: enables WinRM for Packer (on the build CD)
 scripts/*.ps1                          Provisioners, plus sysprep.ps1 (the shutdown command)
-drivers/vendor-drivers/                Extracted bare-metal drivers (.inf trees)
+variants/*.toml                        Known hardware variants: driver packages and devices
+scripts/drivers.py                     Fetches, unpacks and checks a variant's drivers
+scripts/build-variant.sh               Fetch a variant's drivers, then packer build
+drivers/vendor-drivers/                Hand-extracted drivers, for builds without a variant
 ```
 
 ## Build host requirements
@@ -23,6 +26,9 @@ Rocky/RHEL 10 package names:
 
 ```bash
 sudo dnf install qemu-kvm edk2-ovmf xorriso
+# For hardware variants (scripts/drivers.py): 7-Zip from EPEL, and pymsi
+sudo dnf install 7zip
+python3 -m venv .venv && .venv/bin/pip install -r requirements-drivers.txt
 ```
 
 You also need Packer 1.10+ (`packer init` fetches the QEMU plugin), access to
@@ -53,8 +59,8 @@ packer build \
 * `product_key` defaults to the public Windows 11 Enterprise KMS client key
   (GVLK), or to no key when `image_name` contains `Evaluation`. Without a key,
   Setup stops at the product key page on non-evaluation media.
-* Vendor drivers go in `drivers/vendor-drivers/`, or point `vendor_drivers_dir`
-  at another directory. See [Adding vendor drivers](#adding-vendor-drivers).
+* To include drivers for specific hardware, build a variant with
+  `scripts/build-variant.sh` instead; see [Hardware variants](#hardware-variants).
 * To watch the install, run with `-var headless=false`, or connect a VNC
   viewer to the `127.0.0.1` port that Packer prints.
 
@@ -109,94 +115,110 @@ Build:                  26200
 * Without root, `7z x "$ISO" sources/install.wim` (the `7zip` package from
   EPEL) extracts the WIM instead of mounting, at the cost of a ~6 GB copy.
 
-### Adding vendor drivers
+### Hardware variants
 
-Every `.inf` found under `vendor_drivers_dir` is staged into the image's driver
-store, so Windows finds drivers for the node's hardware on first boot. Only
-add what a headless Ironic node needs: network, storage and chipset drivers.
-Leave out GPU, audio and other desktop drivers; they are large and unused.
+A variant is a file in `variants/` describing one hardware model: the vendor
+driver packages to include, pinned by URL and SHA-256, and the devices the
+model can contain. Known variants:
 
-Drivers must be 64-bit, for Windows 11, and Microsoft-signed (WHQL or
-attestation signed), or Windows 11 won't load them, Secure Boot or not.
-Keep path components under 64 characters: the build CD uses Joliet names.
+| Variant | Hardware |
+|---|---|
+| `dell-poweredge-r740xd` | Dell PowerEdge R740xd (SKU 0737), every NIC, storage and FC option Dell lists for it, including Mellanox ConnectX-3 to ConnectX-7 |
+| `dell-precision-7960-rack` | Dell Precision 7960 Rack, from Dell's Windows 11 driver pack |
 
-#### Example: Dell Precision 7960 Rack
+Build one with:
 
-The Precision 7960 Rack is a 2U workstation with an iDRAC, so Ironic can drive
-it with the `idrac` or `redfish` hardware type, and Dell supports Windows 11
-on it. Dell publishes a Windows 11 driver pack per model, listed in its driver
-pack catalog with download paths and SHA-256 hashes.
+```bash
+scripts/build-variant.sh dell-poweredge-r740xd \
+  -var iso_url=/path/to/windows-11-enterprise.iso \
+  -var iso_checksum=sha256:<sha256 of the ISO> \
+  -var 'image_name=Windows 11 Enterprise'
+```
 
-1. Find the current pack in Dell's catalog (`cabextract` and `7zip` are in
-   EPEL):
+The output is `output-dell-poweredge-r740xd/windows-11-dell-poweredge-r740xd.qcow2`.
+Extra arguments are passed to `packer build`.
+
+`build-variant.sh` first runs `scripts/drivers.py fetch`, which:
+
+* downloads each package into `.cache/drivers/` and checks its SHA-256;
+* unpacks it, including the vendor installers drivers are wrapped in: zip and
+  cab, MSI (through pymsi, keeping real file names), WiX Burn bundles and
+  InstallShield setup launchers;
+* reads every INF's `[Manufacturer]` section and keeps only drivers Windows 11
+  x64 will accept. Server-only INFs (decorated `NTamd64.10.0.3`) are silently
+  ignored by Windows 11, so they're dropped and reported rather than staged;
+* writes the drivers to `drivers/<variant>/` with a `REPORT.md` listing every
+  INF and why it was kept or dropped.
+
+The build then stages every driver into the image, so Windows finds them when
+it detects the node's hardware on first boot.
+
+#### Checking coverage
+
+`coverage` checks that every device listed in a variant has a Windows 11
+driver, either inbox (read from the ISO) or staged by the variant:
+
+```bash
+sudo mount -o loop,ro /path/to/windows-11-enterprise.iso /mnt/win-iso
+.venv/bin/python scripts/drivers.py coverage variants/dell-poweredge-r740xd.toml \
+  --inbox /mnt/win-iso/sources/install.wim
+sudo umount /mnt/win-iso
+```
+
+It exits non-zero if a device has no driver. For the R740xd:
+
+```text
+Device                                     Windows 11 inbox             Staged by this variant
+PERC H730/H730P (SAS3108)                  megasas2i.inf, percsas3i.inf perc9
+PERC H740P/H840 (SAS3508)                  megasas35i.inf               perc10
+HBA330 (SAS3008 IT)                        lsi_sas3i.inf                -
+BOSS-S1 / onboard SATA (AHCI)              mshdc.inf                    -
+Broadcom BCM57414 25GbE                    -                            broadcom-netxtreme-e
+QLogic 57800 10GbE                         netevbda.inf                 -
+Intel X520 / 82599 10GbE                   -                            intel-x520
+Mellanox ConnectX-3 Pro                    mlx4_bus.inf                 -
+Mellanox ConnectX-5                        netmlx5.inf                  mellanox-winof2, mellanox-winof2-cx4
+Emulex LPe31000/32000 FC                   -                            emulex-fc
+...
+```
+
+Every R740xd boot controller (PERC 9/10, HBA330, BOSS-S1, NVMe) has a Windows
+11 inbox driver, which matters because a driver staged into the image may not
+load early enough to boot from.
+
+#### Adding a variant
+
+1. Copy an existing file in `variants/` and fill in `[variant]`, then one
+   `[[packages]]` entry per driver package (`id`, `description`, `url`,
+   `sha256`, and optionally `include` globs to pick INFs, matched against
+   their path inside the unpacked package, and `required = false`).
+2. For Dell servers, `drivers.py dell-catalog` lists the newest Windows driver
+   package per family for a system ID, ready to paste. The system ID is the
+   `SKU` in the node's Ironic inventory, e.g. `SKU=0737` for the R740xd:
 
    ```bash
-   sudo dnf install -y 7zip
-   curl -LO https://downloads.dell.com/catalog/DriverPackCatalog.cab
-   7z x -y DriverPackCatalog.cab          # -> DriverPackCatalog.xml
-   grep -o 'path="[^"]*Precision-7960-Rack[^"]*Win11[^"]*"' DriverPackCatalog.xml
+   .venv/bin/python scripts/drivers.py dell-catalog --system-id 0737
    ```
 
-   At the time of writing that is release `DVXGJ`, version A09:
+   Dell supports Windows Server, not Windows 11, on PowerEdge, so these are
+   Server 2022/2025 packages; `fetch` reports which of their INFs Windows 11
+   accepts. For Dell clients and workstations, use the per-model Windows 11
+   driver packs in `https://downloads.dell.com/catalog/DriverPackCatalog.cab`,
+   as `variants/dell-precision-7960-rack.toml` does.
+3. Add `[[devices]]` entries with the PCI IDs (`PCI\VEN_xxxx&DEV_xxxx`) or class
+   codes (`PCI\CC_xxxxxx`) of the hardware the model can contain, run `fetch`
+   and `coverage`, and read `drivers/<variant>/REPORT.md`.
 
-   ```text
-   path="FOLDER14214605M/1/Precision-7960-Rack-DVXGJ_Win11_1.0_A09.exe"
-   ```
+`drivers.py check-infs DIR` reports which INFs under any directory Windows 11
+would accept, e.g. for drivers downloaded by hand.
 
-   The SHA-256 is in the `<Hash algorithm="SHA256">` element of the same
-   `<DriverPackage>` entry.
+#### Without a variant
 
-2. Download and verify it:
-
-   ```bash
-   curl -LO https://downloads.dell.com/FOLDER14214605M/1/Precision-7960-Rack-DVXGJ_Win11_1.0_A09.exe
-   echo "637b463754deaa8b8f456ffb0d3a4ac5eac2e90d96f3d80403881a4a04c39456  Precision-7960-Rack-DVXGJ_Win11_1.0_A09.exe" | sha256sum -c
-   ```
-
-3. Extract only the folders a server needs. The pack is a self-extracting
-   `.exe`, but 7-Zip opens it directly on Linux. Of its 3.4 GB, 3.2 GB is GPU
-   drivers; the three folders below come to about 12 MB:
-
-   ```bash
-   7z x -y Precision-7960-Rack-DVXGJ_Win11_1.0_A09.exe -o/tmp/dell-7960 \
-     'Precision-7960-Rack/Win11/x64/network/*' \
-     'Precision-7960-Rack/Win11/x64/storage/*' \
-     'Precision-7960-Rack/Win11/x64/chipset/*'
-   rm -rf drivers/vendor-drivers/precision-7960-rack
-   cp -r /tmp/dell-7960/Precision-7960-Rack/Win11/x64 drivers/vendor-drivers/precision-7960-rack
-   ```
-
-   (On Windows, `Precision-7960-Rack-DVXGJ_Win11_1.0_A09.exe /s /e=C:\dell-7960`
-   extracts the whole pack.)
-
-   What's in them for this model:
-
-   | Folder | Drivers | Hardware |
-   |---|---|---|
-   | `network/` | `e1r.inf`, `ixs.inf`, `i40ea.inf`, `icea.inf` | Intel I210 1 GbE, X710, XL710 and E810 NICs |
-   | `storage/` | `iaVROC.inf`, `iaStorE.inf`, ... | Intel VROC (NVMe RAID) and RST SATA |
-   | `chipset/` | `SapphireRapidsSystem.inf`, `EmmitsburgSystem.inf`, ... | Intel Xeon W / W790 chipset devices |
-
-4. Build as normal. The build log lists each INF that was added, then the
-   driver store contents, for example:
-
-   ```text
-   Adding E:\vendor-drivers\precision-7960-rack\network\732VN_A00-00\PROCGB\icea.inf
-   ```
-
-   Packer puts the whole `vendor-drivers` directory on the CD, so one image
-   can carry drivers for several models side by side.
-
-Notes:
-
-* NICs or HBAs added to the node (e.g. Broadcom or NVIDIA/Mellanox cards)
-  aren't in the model's driver pack. Download those vendors' Windows 11
-  drivers, extract the `.inf`/`.sys`/`.cat` files and add a directory for
-  each.
-* If the node boots from an Intel VROC RAID volume, test a deploy: VROC is
-  boot-critical, and drivers staged into a running Windows may not be enough
-  to boot from it (see [Limitations](#limitations)). NVMe or SATA drives not
-  in a RAID volume use Windows' inbox drivers and are unaffected.
+Every `.inf` under `vendor_drivers_dir` (default `drivers/vendor-drivers/`)
+is staged, so hand-extracted drivers can also go there. They must be 64-bit,
+accepted by Windows 11 (check with `drivers.py check-infs`) and
+Microsoft-signed. Keep path components under 64 characters: the build CD uses
+Joliet names.
 
 ### What the build does
 
@@ -355,8 +377,16 @@ console.
 * **Boot-critical storage drivers.** Vendor drivers are staged in the driver
   store while Windows is running. That is enough for NICs and for storage that
   isn't the boot disk. If a node boots from a controller with no inbox Windows
-  driver (some RAID/HBA cards), test a deploy. It may need the driver injected
-  offline with `dism /Add-Driver` to avoid `INACCESSIBLE_BOOT_DEVICE`.
+  11 driver, test a deploy: it may need the driver injected offline with
+  `dism /Add-Driver` to avoid `INACCESSIBLE_BOOT_DEVICE`. `drivers.py
+  coverage` shows which controllers have inbox drivers. On the R740xd all do;
+  booting from PERC S140 software RAID (staged driver only) is untested, as is
+  Intel VROC RAID on the Precision 7960.
+* **Variant drivers are checked, not hardware-tested.** `fetch` checks that
+  Windows 11 accepts each INF, and `coverage` that each listed device has a
+  driver, but neither proves the hardware works: test a deploy on each new
+  configuration. Some vendor packages are Windows Server builds running on a
+  client OS (see `drivers/<variant>/REPORT.md` for each INF's decoration).
 * **Non-English ISOs.** `groups=Administrators` in the cloudbase-init configs
   is the English group name. Change it to the localised name (for example
   `Administratoren`) for other languages.

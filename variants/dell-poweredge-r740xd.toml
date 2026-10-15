@@ -1,0 +1,268 @@
+# Dell PowerEdge R740xd (Dell system ID / SKU 0737).
+#
+# Every Windows network, storage, chipset and video driver Dell publishes for
+# the R740xd, so one image covers any configuration of it. Dell supports
+# Windows Server, not Windows 11, on PowerEdge: these are Windows Server
+# 2022/2025 packages, and `scripts/drivers.py fetch` keeps only the INFs
+# Windows 11 accepts. `scripts/drivers.py coverage` checks every device below.
+#
+# Taken from Dell's catalog (https://downloads.dell.com/catalog/Catalog.xml.gz,
+# version 26.10.08). To look for newer packages:
+#   scripts/drivers.py dell-catalog --system-id 0737
+#
+# Not listed because Windows 11 has an inbox driver (see [[devices]]):
+#   QLogic 57800/57810 (netevbda), Mellanox ConnectX-3/3 Pro (mlx4_bus), and
+#   every boot storage option (PERC 9/10, HBA330, BOSS-S1 AHCI, NVMe).
+
+[variant]
+name = "dell-poweredge-r740xd"
+description = "Dell PowerEdge R740xd: all NIC, storage controller and chipset options."
+# How the node identifies itself in Ironic inventory (system_vendor):
+manufacturer = "Dell Inc."
+product_name = "PowerEdge R740xd"
+dell_system_id = "0737"
+
+[[packages]]
+id = "intel-nic"
+description = "Intel I350, X550, X710/XXV710/XL710 and E810 NICs"
+# Dell J99NN 25.0.0: Intel NIC Family Version 25.0 Drivers for Windows 64-bit Operating Systems
+# X710/E810 from the Windows 11 25H2 builds; I350/X550 from Server 2025 (no 25H2 build).
+url = "https://downloads.dell.com/FOLDER14855482M/1/Network_Driver_J99NN_WN64_25.0.0_A00.EXE"
+sha256 = "1660a6035eab9c2aac876f32cea6ecbc0b1eafffc2abc28734440adc951e01e9"
+include = ["*/production/25H2-x64/*", "*/production/WS2K25-x64/1G_I350/*", "*/production/WS2K25-x64/10G_X550/*", "*/production/WS2K25-x64/10G_VF_X550/*"]
+
+[[packages]]
+id = "intel-x520"
+description = "Intel X520 / 82599 10GbE (X520 + I350 network daughter card)"
+# Dell X9PPT 22.0.0: Intel NIC Family Version 22.0.0 Drivers for Windows Server 2019 and 2022 Operating Systems
+# Intel dropped the X520 from later packages and Windows 11 has no inbox driver.
+url = "https://downloads.dell.com/FOLDER09683951M/2/Network_Driver_X9PPT_WN64_22.0.0_A00_01.EXE"
+sha256 = "8d876870fa95c3cc68e02d08745a3c0a73b98fea0cb383e41546a2f474793bd6"
+include = ["*/Winx64/PROXGB/NDIS68/ixn68x64.inf"]
+
+[[packages]]
+id = "broadcom-netxtreme"
+description = "Broadcom NetXtreme BCM5720 1GbE (LOM and daughter card)"
+# Dell RNT70 23.81.0: Broadcom Windows 64bit driver update for NetXtreme Ethernet adapters, 23.8
+url = "https://downloads.dell.com/FOLDER14843705M/1/Network_Driver_RNT70_WN64_23.81.0_238.1.170.0.EXE"
+sha256 = "34c73e266ac07f723c96e04c63a9d388742183ae6e81c62b7efbc5c02647dbbc"
+include = ["*/W2k25-x64/*"]
+
+[[packages]]
+id = "broadcom-netxtreme-e"
+description = "Broadcom NetXtreme-E BCM57412/57414/57416 10/25GbE"
+# Dell X9DJG 38.11.70.00: Broadcom Windows 64bit driver update for NetXtreme-E Ethernet adapters for the 23.8 update.
+url = "https://downloads.dell.com/FOLDER14843656M/2/Network_Driver_X9DJG_WN64_38.11.70.00_238.1.170.0_01.EXE"
+sha256 = "9ba79c282b4434c52eb45cd6a9ea316d1fb743478c94074e308d95404ea7a38e"
+include = ["*/W2k25-x64/*"]
+
+[[packages]]
+id = "mellanox-winof2"
+description = "NVIDIA/Mellanox WinOF-2 25.1: ConnectX-4 Lx, ConnectX-5, ConnectX-6 (Dx/Lx), ConnectX-7"
+# Dell 3G71F 25.1: Mellanox Windows 64-bit Server OS drivers for Mellanox ConnectX-4 Lx, ConnectX-5, ConnectX-6 and ConnectX-7 Ethernet adapters
+# mlx5.inf has a Windows 11 24H2+ client section (NTamd64.10.0.1..26020).
+url = "https://downloads.dell.com/FOLDER13036121M/1/Network_Driver_3G71F_WN64_25.1_A00.EXE"
+sha256 = "86e7bf8e2f832590f364d55dfce2cd74f32109d4b72e4bfaf2102f615eac1b12"
+
+[[packages]]
+id = "mellanox-winof2-cx4"
+description = "NVIDIA/Mellanox WinOF-2 3.0, for ConnectX-4 (non-Lx), dropped from 25.x"
+# Dell MXTKX 03.00.01: Mellanox Windows 64-bit Server OS drivers for Mellanox ConnectX-4 Lx, ConnectX-4,  ConnectX-5, ConnectX-6 and ConnectX-7  Ethernet adapters
+url = "https://downloads.dell.com/FOLDER08971575M/4/Network_Driver_MXTKX_WN64_03.00.01.EXE"
+sha256 = "49a447c560bc7bca24fa20722da62a3bbc4933d82b71d2400ae55e5682d28f85"
+include = ["*/Drivers/mlx5.inf"]
+
+[[packages]]
+id = "marvell-fastlinq"
+description = "Marvell/QLogic FastLinQ QL41xxx 10/25GbE"
+# Dell 800MW 36.20.09: Windows drivers for Marvell FastLinQ 41000 series Ethernet adapters and Marvell QLogic Fibre Channel Adapters
+url = "https://downloads.dell.com/FOLDER11086234M/1/Network_Driver_800MW_WN64_36.20.09_A00-00.EXE"
+sha256 = "ca5a447441d4e7fbbb6eae2c1f42e32f13104e0cbe7efa8408d689f9afc0aa5e"
+
+[[packages]]
+id = "qlogic-fc"
+description = "Marvell/QLogic QLE269x/274x/277x Fibre Channel HBAs"
+# Dell XNTFF 37.15.05: Windows drivers for Marvell QLogic Fibre Channel adapters
+url = "https://downloads.dell.com/FOLDER14633058M/1/Network_Driver_XNTFF_WN64_37.15.05_A00.EXE"
+sha256 = "5df918fe327396a3592716a7699821a5deb9ac21b52f022fe5dc257a8d611912"
+
+[[packages]]
+id = "solarflare"
+description = "Solarflare (AMD) X2522-25G and X2562"
+# Dell WKY4N 1.9.1: Solarflare X2522-25G and X2562 Drivers for Windows Operating Systems
+url = "https://downloads.dell.com/FOLDER06960501M/2/Network_Driver_WKY4N_WN64_1.9.1_A00.EXE"
+sha256 = "773350f0bff4da2004af060a5184ecb0260bf703de03bbb76093e420993304da"
+
+[[packages]]
+id = "perc10"
+description = "PERC 10 (SAS3.5): H740P, H840"
+# Dell 95F5G 7.721.03.0: Windows Server 2022 Driver 7.721.03.00 for PERC Controllers
+url = "https://downloads.dell.com/FOLDER09248656M/2/SAS-RAID_Driver_95F5G_WN64_7.721.03.0_A03_01.EXE"
+sha256 = "9e38ab112dc12b3031cffa9d3fbab2e7bc87fbcd6d7342e9da01d2833c02213e"
+
+[[packages]]
+id = "perc9"
+description = "PERC 9 (SAS3108/3008): H330, H730, H730P, H830"
+# Dell T244W 6.604.06.00: Windows Server 2016 Driver 6.604.06.00 for PERC H330/H730/H730P/H830/H730P MX/FD33xD/FD33xS Controllers
+url = "https://downloads.dell.com/FOLDER03940499M/11/SAS-RAID_Driver_T244W_WN64_6.604.06.00_A01_08.EXE"
+sha256 = "26e77253f65b8560fd36799094fcc1c15b2142d5ceb0565deed50c11dd2875a8"
+
+[[packages]]
+id = "perc-s140"
+description = "PERC S140 software RAID"
+# Dell 85R54 5.11.0.0003: Windows Server 2022 64bit driver for PERC S140 Controller
+url = "https://downloads.dell.com/FOLDER11422921M/1/SAS-RAID_Driver_85R54_WN64_5.11.0.0003_A00.EXE"
+sha256 = "aed7e43b8b1400dab9d96864a8b7978cd348fbd2755566c779b5b656bff4af5c"
+
+[[packages]]
+id = "hba330"
+description = "HBA330 and HBA355 SAS HBAs"
+# Dell M2P63 2.61.48.00: Windows Server 2022 Driver 2.61.48.00 for HBA10-11 Controllers
+url = "https://downloads.dell.com/FOLDER09649533M/5/SAS-Non-RAID_Driver_M2P63_WN64_2.61.48.00_A02_04.EXE"
+sha256 = "c5a3b75d2a83a91c739c845b86f998421a9c88aec1860fa2d5b001c33544fe0c"
+
+[[packages]]
+id = "hba355"
+description = "HBA355 SAS HBA, newer driver"
+# Dell R31NP 2.61.74.00: Windows Server 2022 Driver 2.61.74.00 for HBA11 Controllers
+url = "https://downloads.dell.com/FOLDER12872713M/1/SAS-Non-RAID_Driver_R31NP_WN64_2.61.74.00_A03.EXE"
+sha256 = "34b21e218b1c3f3265cbd416658044f84482b5ec51405bb34fb8c7896be2f73a"
+
+[[packages]]
+id = "boss-management"
+description = "BOSS-S1 management console device (its SSDs use the inbox AHCI driver)"
+# Dell 7004G 1.2.0.1055: BOSS Console Management driver for WS2022-2025
+url = "https://downloads.dell.com/FOLDER11846807M/2/SAS-RAID_Driver_7004G_WN64_1.2.0.1055_A00_01.EXE"
+sha256 = "316abfe14731d4109872458fbd5d9bac4287323be7a3a52f14f547fb021c5f50"
+
+[[packages]]
+id = "intel-chipset"
+description = "Intel C620 chipset device INFs (names only: the devices work without them)"
+# Dell 4DDMJ 10.1.19913.8607: Intel C62x/C240 Series Chipset Drivers
+url = "https://downloads.dell.com/FOLDER11899538M/2/Chipset_Driver_4DDMJ_WN64_10.1.19913.8607_A00_01.EXE"
+sha256 = "61ec3da306eb04f0d517f9a37ebf1e5cc3f8482443c4176dbaded8a1f500395f"
+required = false
+
+[[packages]]
+id = "matrox-video"
+description = "Matrox G200eW3 (iDRAC9 video); the inbox basic display driver also works"
+# Dell N1HM4 4.4.0.4: Matrox Video Driver
+url = "https://downloads.dell.com/FOLDER05278833M/5/Video_Driver_N1HM4_WN64_4.4.0.4_A00_03.EXE"
+sha256 = "c35df7a5450b2f4c1606cb91104d556b99c49fbbb8097e121bb01aa26f359190"
+required = false
+
+[[packages]]
+id = "emulex-fc"
+description = "Emulex LPe31000/32000/35000 Fibre Channel HBAs"
+# Dell 8XGGG 12.34.10: Emulex Fibre Channel Adapter Drivers and Software Application for Windows.
+url = "https://downloads.dell.com/FOLDER14069762M/3/Fibre-Channel_Driver_8XGGG_WN64_12.34.10_A00-00_02.EXE"
+sha256 = "c9606a3d6e28e1852b2f3bfbb47c40461648c62bc2f58a18524c1dc07dfb1ecc"
+include = ["*/x64/Win2025/*"]
+
+# Devices `scripts/drivers.py coverage` checks: each needs an inbox or staged
+# Windows 11 driver. IDs are PCI vendor/device prefixes or class codes.
+
+# Boot storage
+[[devices]]
+name = "PERC H730/H730P (SAS3108)"
+ids = ["PCI\\VEN_1000&DEV_005D"]
+[[devices]]
+name = "PERC H330 (SAS3008)"
+ids = ["PCI\\VEN_1000&DEV_005F"]
+[[devices]]
+name = "PERC H740P/H840 (SAS3508)"
+ids = ["PCI\\VEN_1000&DEV_0016"]
+[[devices]]
+name = "HBA330 (SAS3008 IT)"
+ids = ["PCI\\VEN_1000&DEV_0097"]
+[[devices]]
+name = "BOSS-S1 / onboard SATA (AHCI)"
+ids = ["PCI\\CC_010601"]
+[[devices]]
+name = "NVMe drives"
+ids = ["PCI\\CC_010802"]
+
+# Network
+[[devices]]
+name = "Broadcom BCM5720 1GbE"
+ids = ["PCI\\VEN_14E4&DEV_165F"]
+[[devices]]
+name = "Broadcom BCM57412 10GbE"
+ids = ["PCI\\VEN_14E4&DEV_16D6"]
+[[devices]]
+name = "Broadcom BCM57414 25GbE"
+ids = ["PCI\\VEN_14E4&DEV_16D7"]
+[[devices]]
+name = "Broadcom BCM57416 10GBASE-T"
+ids = ["PCI\\VEN_14E4&DEV_16D8"]
+[[devices]]
+name = "QLogic 57800 10GbE"
+ids = ["PCI\\VEN_14E4&DEV_168A"]
+[[devices]]
+name = "QLogic 57810 10GbE"
+ids = ["PCI\\VEN_14E4&DEV_168E"]
+[[devices]]
+name = "QLogic FastLinQ QL41xxx"
+ids = ["PCI\\VEN_1077&DEV_8070"]
+[[devices]]
+name = "Intel I350 1GbE"
+ids = ["PCI\\VEN_8086&DEV_1521"]
+[[devices]]
+name = "Intel X520 / 82599 10GbE"
+ids = ["PCI\\VEN_8086&DEV_10FB"]
+[[devices]]
+name = "Intel X550 10GBASE-T"
+ids = ["PCI\\VEN_8086&DEV_1563"]
+[[devices]]
+name = "Intel X710 10GbE"
+ids = ["PCI\\VEN_8086&DEV_1572"]
+[[devices]]
+name = "Intel XXV710 25GbE"
+ids = ["PCI\\VEN_8086&DEV_158B"]
+[[devices]]
+name = "Intel E810 25/100GbE"
+ids = ["PCI\\VEN_8086&DEV_1592", "PCI\\VEN_8086&DEV_159B"]
+[[devices]]
+name = "Mellanox ConnectX-3"
+ids = ["PCI\\VEN_15B3&DEV_1003"]
+[[devices]]
+name = "Mellanox ConnectX-3 Pro"
+ids = ["PCI\\VEN_15B3&DEV_1007"]
+[[devices]]
+name = "Mellanox ConnectX-4"
+ids = ["PCI\\VEN_15B3&DEV_1013"]
+[[devices]]
+name = "Mellanox ConnectX-4 Lx"
+ids = ["PCI\\VEN_15B3&DEV_1015"]
+[[devices]]
+name = "Mellanox ConnectX-5"
+ids = ["PCI\\VEN_15B3&DEV_1017"]
+[[devices]]
+name = "Mellanox ConnectX-5 Ex"
+ids = ["PCI\\VEN_15B3&DEV_1019"]
+[[devices]]
+name = "Mellanox ConnectX-6"
+ids = ["PCI\\VEN_15B3&DEV_101B"]
+[[devices]]
+name = "Mellanox ConnectX-6 Dx"
+ids = ["PCI\\VEN_15B3&DEV_101D"]
+[[devices]]
+name = "Mellanox ConnectX-6 Lx"
+ids = ["PCI\\VEN_15B3&DEV_101F"]
+[[devices]]
+name = "Mellanox ConnectX-7"
+ids = ["PCI\\VEN_15B3&DEV_1021"]
+[[devices]]
+name = "Solarflare X2522/X2562"
+ids = ["PCI\\VEN_1924&DEV_0A03", "PCI\\VEN_1924&DEV_0B03"]
+
+# Other
+[[devices]]
+name = "QLogic QLE2690/2692 FC"
+ids = ["PCI\\VEN_1077&DEV_2261"]
+[[devices]]
+name = "Matrox G200eW3 (iDRAC video)"
+ids = ["PCI\\VEN_102B&DEV_0536"]
+[[devices]]
+name = "Emulex LPe31000/32000 FC"
+ids = ["PCI\\VEN_10DF&DEV_F400"]

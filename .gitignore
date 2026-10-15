@@ -3,3 +3,12 @@ output-*/
 packer_cache/
 crash.log
 *.auto.pkrvars.hcl
+
+# Downloaded vendor drivers (scripts/drivers.py fetch) and its cache
+.cache/
+drivers/*
+!drivers/vendor-drivers/
+drivers/vendor-drivers/*
+!drivers/vendor-drivers/README.md
+.venv/
+__pycache__/
