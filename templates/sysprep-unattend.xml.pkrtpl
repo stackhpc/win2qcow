@@ -15,11 +15,11 @@
     </component>
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
-        <!-- Remove the scheduled task and script that ran sysprep during the build. -->
+        <!-- Remove the script that ran sysprep during the build. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Path>cmd.exe /c "schtasks /delete /tn packer-sysprep /f &amp; del /q %WINDIR%\Temp\sysprep.ps1 &amp; exit 0"</Path>
-          <Description>Remove build-time sysprep task</Description>
+          <Path>cmd.exe /c "del /q %WINDIR%\Temp\sysprep.ps1 &amp; exit 0"</Path>
+          <Description>Remove build-time sysprep script</Description>
         </RunSynchronousCommand>
         <!-- User creation and volume extension from the Ironic config drive.
              The user created here is the only enabled admin account, so the

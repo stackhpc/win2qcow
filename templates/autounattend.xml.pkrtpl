@@ -145,6 +145,11 @@
     </component>
   </settings>
 
+  <!-- Customise in audit mode, as Microsoft recommends for client images: the
+       build never runs OOBE, so no build-time OOBE account (defaultuser0), no
+       online OOBE updates, and no per-user app state for build accounts left in
+       the image. Without this, the first user to sign in on a deployed node
+       gets a broken taskbar and a black screen. -->
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <InputLocale>${input_locale}</InputLocale>
@@ -152,15 +157,15 @@
       <UILanguage>${ui_language}</UILanguage>
       <UserLocale>${user_locale}</UserLocale>
     </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <Reseal>
+        <Mode>Audit</Mode>
+      </Reseal>
+    </component>
+  </settings>
+
+  <settings pass="auditSystem">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <OOBE>
-        <HideEULAPage>true</HideEULAPage>
-        <HideLocalAccountScreen>true</HideLocalAccountScreen>
-        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
-        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-        <ProtectYourPC>3</ProtectYourPC>
-      </OOBE>
       <UserAccounts>
         <AdministratorPassword>
           <Value>${admin_password}</Value>
@@ -176,13 +181,19 @@
         <Enabled>true</Enabled>
         <LogonCount>50</LogonCount>
       </AutoLogon>
-      <FirstLogonCommands>
-        <SynchronousCommand wcm:action="add">
+    </component>
+  </settings>
+
+  <!-- Runs at each audit-mode sign-in; setup-winrm.ps1 is idempotent. -->
+  <settings pass="auditUser">
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
           <Description>Enable WinRM for Packer (script is on the build CD)</Description>
-          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "foreach ($d in Get-PSDrive -PSProvider FileSystem) { $s = Join-Path $d.Root 'setup-winrm.ps1'; if (Test-Path $s) { &amp; $s; break } }"</CommandLine>
-        </SynchronousCommand>
-      </FirstLogonCommands>
+          <Path>powershell -NoProfile -ExecutionPolicy Bypass -Command "foreach ($d in Get-PSDrive -PSProvider FileSystem) { $s = Join-Path $d.Root 'setup-winrm.ps1'; if (Test-Path $s) { &amp; $s; break } }"</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
     </component>
   </settings>
 </unattend>

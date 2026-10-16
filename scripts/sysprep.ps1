@@ -1,9 +1,10 @@
 # Packer's shutdown_command.
 #
-# Run over WinRM (no arguments), it registers and starts a scheduled task that
-# runs this script again as SYSTEM with -Generalize, then returns. Sysprep must
-# not run inside the WinRM shell: Windows kills the shell's processes when
-# Packer closes it.
+# Run over WinRM (no arguments), it starts this script again with -Generalize
+# through WMI (Win32_Process.Create), then returns. Sysprep must not run inside
+# the WinRM shell: Windows kills the shell's processes when Packer closes it.
+# A WMI-created process is outside that job. (A scheduled task would be too,
+# but Task Scheduler queues tasks while audit mode's OOBE is in progress.)
 #
 # Run with -Generalize, it removes everything that only existed for the build,
 # then runs sysprep, which powers the VM off.
@@ -12,16 +13,13 @@ param(
   [switch]$DisableBuiltinAdmin
 )
 
-$taskName = 'packer-sysprep'
-
 if (-not $Generalize) {
   $ErrorActionPreference = 'Stop'
-  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Generalize"
-  if ($DisableBuiltinAdmin) { $arguments += ' -DisableBuiltinAdmin' }
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
-  Register-ScheduledTask -TaskName $taskName -Action $action -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
-  Start-ScheduledTask -TaskName $taskName
-  Write-Host "Started scheduled task $taskName; sysprep will power the VM off."
+  $command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Generalize"
+  if ($DisableBuiltinAdmin) { $command += ' -DisableBuiltinAdmin' }
+  $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command }
+  if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create failed with $($r.ReturnValue)" }
+  Write-Host "Started sysprep (pid $($r.ProcessId)); it will power the VM off."
   exit 0
 }
 
@@ -87,8 +85,12 @@ Get-ChildItem -Path 'HKLM:\SOFTWARE\Cloudbase Solutions\Cloudbase-Init' -ErrorAc
   Remove-Item -Recurse -Force
 Remove-Item -Path "$cloudbase\log\*" -Force -ErrorAction SilentlyContinue
 
-# This task and script are removed in the specialize pass on the deployed node
+# This script is removed in the specialize pass on the deployed node
 # (see sysprep-unattend.xml).
+# Audit mode opens the Sysprep window at sign-in; only one instance can run.
+Get-Process -Name sysprep -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 2
+
 Write-Host 'Running sysprep'
 Stop-Transcript
 & "$env:SystemRoot\System32\Sysprep\Sysprep.exe" /generalize /oobe /shutdown /quiet "/unattend:$cloudbase\conf\Unattend.xml"

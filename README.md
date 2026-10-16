@@ -12,11 +12,12 @@ templates/autounattend.xml.pkrtpl      Build-time answer file (on the build CD)
 templates/sysprep-unattend.xml.pkrtpl  Answer file sysprep applies on the deployed node
 templates/cloudbase-init*.conf.pkrtpl  cloudbase-init config (service and specialize stage)
 files/SetupComplete.cmd                Enables the cloudbase-init service after OOBE
-scripts/setup-winrm.ps1                First logon: enables WinRM for Packer (on the build CD)
+scripts/setup-winrm.ps1                Audit-mode sign-in: enables WinRM for Packer (on the build CD)
 scripts/*.ps1                          Provisioners, plus sysprep.ps1 (the shutdown command)
 variants/*.toml                        Known hardware variants: driver packages and devices
 scripts/drivers.py                     Fetches, unpacks and checks a variant's drivers
 scripts/build-variant.sh               Fetch a variant's drivers, then packer build
+scripts/collect-diagnostics.ps1        Run on a deployed node to collect first-boot logs
 drivers/vendor-drivers/                Hand-extracted drivers, for builds without a variant
 ```
 
@@ -229,9 +230,14 @@ Joliet names.
    build VM and partitions the disk as GPT: ESP, MSR, a 1 GB WinRE partition,
    then C: taking the rest. C: is last so it can be extended on deploy;
    without the WinRE partition, Setup shrinks C: to create one after it.
-   Setup then logs on as Administrator.
-3. On first logon, `setup-winrm.ps1` runs from the CD and Packer connects over
-   WinRM.
+   Instead of running OOBE, Setup boots into **audit mode** and signs in as
+   Administrator. Audit mode is how Microsoft intends client images to be
+   customised: the build never creates OOBE's temporary account or per-user
+   app state for build accounts. Images customised after OOBE give the first
+   user to sign in on a deployed node a broken taskbar: Explorer crashes and
+   the screen stays black after "Almost there".
+3. At that audit-mode sign-in, `setup-winrm.ps1` runs from the CD and Packer
+   connects over WinRM.
 4. Provisioners then, in order:
    * Configure Windows: RDP with NLA, high-performance power plan, no
      hibernation, BitLocker auto-encryption blocked, Smart App Control off.
@@ -243,9 +249,11 @@ Joliet names.
    * Install the sysprep answer file.
    * Install `SetupComplete.cmd`.
    * Run the clean-up script (DISM component clean-up, TRIM).
-5. Packer's shutdown command runs `sysprep.ps1`. It starts a scheduled task
-   (as SYSTEM) and returns, because Windows kills processes started from a
-   WinRM shell when Packer closes it. The task:
+5. Packer's shutdown command runs `sysprep.ps1`. It starts itself again
+   through WMI (`Win32_Process.Create`) and returns, because Windows kills
+   processes started from a WinRM shell when Packer closes it. (A scheduled
+   task doesn't work: Task Scheduler queues tasks while audit mode is in
+   progress.) The second run:
    * Removes AppX packages installed for a user but not provisioned, which
      break Windows 11 sysprep.
    * Removes the build-only Windows Update and Store auto-update policies and
@@ -262,8 +270,8 @@ Joliet names.
 
 ### On first boot of a deployed node
 
-* In the specialize pass, the scheduled task left from the build is deleted,
-  then cloudbase-init reads the Ironic config drive. It creates the `Admin`
+* In the specialize pass, the build's `sysprep.ps1` is deleted, then
+  cloudbase-init reads the Ironic config drive. It creates the `Admin`
   user (set by the `cloudbase_init_username` variable) and extends C: to fill
   the disk.
 * OOBE runs without prompts: locales are preset, the account screens are
@@ -371,6 +379,23 @@ Caveats:
 
 cloudbase-init also logs to COM1 at 115200, which shows up on the BMC serial
 console.
+
+If a deployment misbehaves, copy `scripts/collect-diagnostics.ps1` to the node
+and run it in an elevated PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File collect-diagnostics.ps1
+```
+
+It writes `C:\diag-<host>-<time>.zip` containing:
+
+* the Windows Setup and sysprep logs;
+* the cloudbase-init logs and config;
+* the setup state, accounts, disks, network and devices without drivers;
+* a metadata-service reachability check;
+* the last three days of event logs.
+
+The zip contains no passwords.
 
 ## Limitations
 
