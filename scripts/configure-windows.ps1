@@ -21,10 +21,14 @@ Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' `
   -Name VerifiedAndReputablePolicyState -Type DWord -Value 0
 
 # Servers, not laptops: no sleep, no hibernation file.
-& powercfg.exe /setactive SCHEME_MIN
-& powercfg.exe /change standby-timeout-ac 0
-& powercfg.exe /change monitor-timeout-ac 0
-& powercfg.exe /hibernate off
+foreach ($a in @('/setactive', 'SCHEME_MIN'), @('/change', 'standby-timeout-ac', '0'),
+                @('/change', 'monitor-timeout-ac', '0'), @('/hibernate', 'off')) {
+  & powercfg.exe @a
+  if ($LASTEXITCODE -ne 0) { throw "powercfg $($a -join ' ') failed with exit code $LASTEXITCODE" }
+}
 
 # Where the file provisioner puts SetupComplete.cmd.
 New-Item -Path "$env:SystemRoot\Setup\Scripts" -ItemType Directory -Force | Out-Null
+
+# Packer uses the last native exit code as the step result.
+exit 0

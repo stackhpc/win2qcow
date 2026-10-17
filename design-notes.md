@@ -16,7 +16,9 @@ to use it; this document covers how it works.
   cloudbase-init. No console interaction.
 * **Nothing from the build survives into the image** that grants access:
   no build password, no open WinRM, no enabled built-in Administrator.
-* **Reproducible.** Every download is pinned by URL and SHA-256.
+* **Reproducible.** Every download is pinned by URL and SHA-256, the ISO
+  checksum is required, the Packer QEMU plugin is pinned to an exact version
+  and the Python dependencies are hash-pinned.
 
 ## Components
 
@@ -128,7 +130,10 @@ devices on the node's first boot.
 Windows Setup can't fetch an answer file over HTTP, but it reads
 `autounattend.xml` from the root of any CD. Packer generates a small CD
 (label `PACKERCD`) with the answer file, the WinRM setup script and the
-variant's drivers. Scripts find it by label, not drive letter.
+variant's drivers, whose directory contents go at the CD root so Setup finds
+`$WinPEDriver$` there. Provisioners find it by its label, and the audit-mode
+sign-in command by looking for `setup-winrm.ps1` on each drive; never by drive
+letter.
 
 ### Disk layout
 
@@ -145,7 +150,7 @@ build's Administrator and OOBE's temporary `defaultuser0`) in the image.
 After sysprep those accounts no longer exist, and on a deployed node the
 first user to sign in gets almost no system apps registered. The taskbar then
 fails to initialise (Explorer aborts in `CTray::Init`) and the screen stays
-black after "Almost ready". Audit mode is also how Microsoft intends client
+black after the "Almost there" screen. Audit mode is also how Microsoft intends client
 images to be customised.
 
 Audit mode has two side effects the build handles:
@@ -194,9 +199,13 @@ node instead of keeping the build VM's devices.
   build. It's used only for Administrator in the build VM.
 * Packer's WinRM port forward listens on 127.0.0.1 only.
 * Before sysprep, `sysprep.ps1` removes the WinRM HTTP listener, Basic auth,
-  unencrypted access and the WinRM firewall rules. It also gives the built-in
-  Administrator a random password and disables it, and deletes Setup's cached
-  copies of the build answer file.
+  unencrypted access and the build's firewall rule, and disables the inbox
+  WinRM HTTP rules. It restores UAC remote restrictions, which
+  `Enable-PSRemoting` turned off, so a network logon with the local admin
+  account doesn't get a full admin token (`remote_local_admin=true` keeps
+  them off for nodes managed over WinRM as `Admin`). It also gives the
+  built-in Administrator a random password and disables it, and deletes
+  Setup's cached copies of the build answer file.
 * On the node, cloudbase-init creates `Admin` with the password from the
   config drive's `admin_pass`, and opens WinRM over HTTPS only.
 
@@ -223,13 +232,32 @@ InstallShield). `drivers.py` unpacks all of these on Linux, then reads each
 INF's `[Manufacturer]` decorations the way Windows 11 does. PowerEdge servers
 only get Windows Server driver packages; an INF decorated server-only
 (`NTamd64.10.0.3`) is silently ignored by Windows 11, so it is dropped and
-reported rather than staged. `coverage` then checks each device the variant
-lists has a driver, either inbox (read from the ISO's `install.wim`) or
-staged.
+reported rather than staged. Run separately (it isn't part of
+`build-variant.sh`, because it needs the ISO's `install.wim`), `coverage`
+checks each device the variant lists has a driver, either inbox or staged.
+
+At build time, `install-vendor-drivers.ps1` cross-checks the build CD against
+the variant's `manifest.json` and fails the build if any INF is missing or
+can't be staged, so a node can't silently ship without its NIC driver.
 
 Drivers are staged with `pnputil /add-driver`, not installed. That's enough
-for NICs and for storage that isn't the boot disk. For the R740xd, every boot
-controller (PERC 9/10, HBA330, BOSS-S1, NVMe) has a Windows 11 inbox driver.
+for NICs and for storage that isn't the boot disk, but not for a boot
+controller with no inbox Windows 11 driver: staged drivers are installed when
+PnP finds the device, after the boot volume is needed. Packages marked
+`boot_critical` (PERC S140 and Smart Array S100i software RAID) go in
+`$WinPEDriver$` on the build CD instead. Windows Setup injects drivers from
+that folder into the image during installation the way `dism /Add-Driver`
+does offline: a boot-start service plus the hardware IDs to bind at boot.
+The alternatives were worse: `dism /Add-Driver` would need the install image
+mounted on the build host (Linux, no DISM), and setting the service to boot
+start from a provisioner would also need the PnP database entries Windows
+uses to bind a boot device it has never seen.
+
+Every model in a variant's `includes` shares one image. Drivers bind only to
+present hardware, so the cost of supporting more models is disk space, and
+operators get one Glance image per OS release instead of one per model. The
+build CD's 64-character Joliet limit is per path component, and the
+`<variant>/<package>/NN-<dir>` layout stays well under it.
 
 ## Scripts and templates
 
@@ -244,8 +272,9 @@ Entry point for a hardware variant. It:
 3. runs `packer build` with `vendor_drivers_dir`, `output_directory` and
    `vm_name` set for that variant.
 
-Extra arguments go to `packer build`. It uses `.venv/` for Python when it
-exists.
+Extra arguments go to `packer build`, and relative paths in them resolve
+against the caller's directory (the script doesn't `cd`). It uses `.venv/` for
+Python when it exists.
 
 **`scripts/drivers.py`**
 Standard library plus 7-Zip and `pymsi`. Subcommands:
@@ -258,10 +287,19 @@ Standard library plus 7-Zip and `pymsi`. Subcommands:
   * InstallShield `ISSetupStream` launchers, decoding their obfuscated
     payload.
 
+  Archive names from the download are kept inside the extraction folder,
+  files next to an INF are never unpacked (they belong to that driver), and
+  a 7-Zip error fails the fetch rather than caching a partial extraction.
+  Extractions are cached per package hash and unpacker version.
+
   It analyses every INF, copies only accepted driver packages to
-  `drivers/VARIANT/`, and writes `REPORT.md` and `manifest.json`. Output is
-  deterministic. A required package with no Windows 11 driver fails the
-  fetch.
+  `drivers/VARIANT/` (`drivers/VARIANT/$WinPEDriver$/` for `boot_critical`
+  packages), and writes `REPORT.md` and `manifest.json`. Variants in
+  `includes` are merged, their packages going under a directory named after
+  the included variant; an INF that two included variants both use is staged
+  once. Output is deterministic. The fetch fails if a required package has no Windows 11
+  driver, if a path component is over the CD's 64-character limit, or if the
+  variant's `name` doesn't match its file name.
 * `coverage VARIANT.toml --inbox install.wim` checks each `[[devices]]`
   entry against inbox and staged drivers, and exits non-zero on a gap.
 * `check-infs DIR` reports which INFs Windows 11 x64 accepts, for drivers
@@ -273,7 +311,8 @@ Standard library plus 7-Zip and `pymsi`. Subcommands:
 One per hardware model:
 
 * `[variant]`: name, description and how the node identifies itself.
-* `[[packages]]`: URL, SHA-256, optional `include` globs and `required`.
+* `[[packages]]`: URL, SHA-256, optional `include`/`exclude` patterns
+  (Python `fnmatch`: case-sensitive, `*` also matches `/`) and `required`.
 * `[[devices]]`: PCI IDs or class codes that `coverage` checks.
 
 `dell-poweredge-r740xd` uses Dell's Server 2022/2025 packages;
@@ -288,8 +327,9 @@ Packer template:
 * the `shutdown_command`.
 
 Variables cover the ISO, image name, locales, sizes, pinned download URLs and
-hashes, and the cloudbase-init user name. `product_key` defaults to the public
-Windows 11 Enterprise KMS client key, or to none for evaluation media.
+hashes, the cloudbase-init user name and `remote_local_admin`.
+`product_key` defaults to the public KMS client key for the edition in
+`image_name`, or to none for evaluation media.
 
 ### Build VM
 
@@ -312,7 +352,10 @@ Runs from the build CD at each audit-mode sign-in. It:
 * raises shell limits;
 * opens TCP 5985.
 
-It's idempotent, and `sysprep.ps1` undoes all of it.
+It's idempotent. `sysprep.ps1` undoes it: listener, Basic auth, unencrypted
+access and firewall rules, and UAC remote restrictions unless
+`remote_local_admin` is set. The WinRM service itself stays Automatic,
+because cloudbase-init's HTTPS listener needs it.
 
 **`scripts/configure-windows.ps1`**
 
@@ -331,7 +374,10 @@ testing. It can be skipped with `virtio_win_guest_tools_url=""`.
 **`scripts/install-vendor-drivers.ps1`**
 Finds the build CD by label and stages every INF on it with `pnputil
 /add-driver`, without `/install`, so nothing binds to the build VM's emulated
-hardware. Failures are warnings, and the driver store is listed at the end.
+hardware. For a variant build (a `manifest.json` is on the CD) it first checks
+the CD holds exactly the INFs the manifest kept, and any staging failure fails
+the build. Hand-placed drivers only produce warnings. The driver store is
+listed at the end.
 
 **`scripts/install-cloudbase-init.ps1`**
 Downloads and verifies the pinned cloudbase-init MSI, installs it quietly
@@ -357,7 +403,8 @@ through WMI with `-Generalize` and returns. With `-Generalize`, it:
 2. removes the build-only Windows Update and Store policies and the
    autologon;
 3. deletes Setup's cached build answer files;
-4. removes the build-time WinRM access;
+4. removes the build-time WinRM access, and restores UAC remote restrictions
+   unless `remote_local_admin` is set;
 5. randomises the built-in Administrator's password, and disables the
    account unless cloudbase-init manages it;
 6. resets cloudbase-init state;
@@ -404,7 +451,8 @@ Run by hand on a node that misbehaves. Zips:
 * a metadata-service reachability check;
 * the last three days of event logs.
 
-No passwords.
+No passwords are collected on purpose, but the cloudbase-init logs include
+user-data script output.
 
 ## How it was validated
 
@@ -423,6 +471,12 @@ No passwords.
 * **On the R740xd:** a deploy of an earlier image showed the black-screen
   problem. It was diagnosed with `collect-diagnostics.ps1` and a crash dump,
   then fixed by moving the build to audit mode.
+* **Boot-critical drivers:** QEMU can't present an S100i or S140 controller,
+  so the combined `dell-hpe-servers` image was checked offline instead: its
+  SYSTEM hive has the `SmartDQp`/`SmartDQa` (S100i) and
+  `bcraid511`/`bcraidf5` (S140) services with boot start type, and its driver
+  database maps those controllers' hardware IDs to the injected INFs. No
+  node has booted from either controller yet.
 
 ## Changes from the original plan
 

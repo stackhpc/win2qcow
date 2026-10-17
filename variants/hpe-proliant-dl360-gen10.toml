@@ -1,0 +1,237 @@
+# HPE ProLiant DL360 Gen10.
+#
+# Every Windows network, storage, chipset, video and iLO driver HPE publishes
+# for the DL360 Gen10's standard and optional devices, so one image covers any
+# configuration of it. HPE supports Windows Server, not Windows 11, on
+# ProLiant: these are Windows Server 2022/2025 Smart Components (cpXXXXXX.exe),
+# and `scripts/drivers.py fetch` keeps only the INFs Windows 11 accepts.
+# `scripts/drivers.py coverage` checks every device below.
+#
+# Taken from the Service Pack for ProLiant (SPP) package list and HPE Support
+# Center (search "DL360 Gen10" at https://support.hpe.com, Drivers and
+# Software, Windows Server 2025). HPE's file URLs are stable, so each package
+# is pinned by URL and SHA-256 like the Dell ones.
+#
+# Not listed because Windows 11 has an inbox driver (see [[devices]]):
+#   NVMe drives and the chipset SATA controller in AHCI mode.
+
+[variant]
+name = "hpe-proliant-dl360-gen10"
+description = "HPE ProLiant DL360 Gen10: all NIC, storage controller, chipset and iLO options."
+# How the node identifies itself in Ironic inventory (system_vendor):
+manufacturer = "HPE"
+product_name = "ProLiant DL360 Gen10"
+
+[[packages]]
+id = "smart-array"
+description = "HPE Smart Array P408i-a/P816i-a/E208i (SmartPQI) and SR controllers"
+# cp071901: HPE Smart Array Gen10, Gen10Plus and Gen11 Controller Driver for Windows Server 2022 and 2025, 1016.38.0.1003
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p406765183/v285501/cp071901.exe"
+sha256 = "e45c822a0e7d8729b27415a8eaa8f624598386afc03b565fe7006c485ec8733e"
+
+[[packages]]
+id = "smart-array-s100i"
+description = "HPE Smart Array S100i SR Gen10 software RAID (chipset SATA in RAID mode)"
+# cp052316: HPE Smart Array S100i SR Gen10 SW RAID Driver for Windows Server
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p1091588108/v214409/cp052316.exe"
+sha256 = "7a7756d67f1a79b780a046a935d668a0e22bba45f54a288c4d3470f88e5d14e2"
+# The S100i has no inbox driver, so Windows can only boot from a volume on it
+# if the driver is installed as a boot driver (see "Boot-critical drivers" in
+# the README).
+boot_critical = true
+
+[[packages]]
+id = "broadcom-nx1"
+description = "Broadcom NX1 1GbE: embedded 4-port 331i, 331FLR, 331T, 332T"
+# cp071589: HPE Broadcom NX1 1Gb Driver for Windows Server x64 Editions, 221.0.10.0
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p122704182/v284109/cp071589.exe"
+sha256 = "ba831c4fd9c2c6d0bb840b521718f4a6d8525151ef40e099eb50796fff788d00"
+
+[[packages]]
+id = "broadcom-netxtreme-e"
+description = "Broadcom NetXtreme-E 10/25GbE: 631FLR-SFP28, 631SFP28, 535FLR-T, 535T"
+# cp072684: HPE Broadcom NetXtreme-E Driver for Windows Server 2025, 238.1.110.0
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p642130490/v288682/cp072684.exe"
+sha256 = "0bb3ccad3715da5087f364a4f08119f8f96e5a19c97e5361087fddb0508deb12"
+
+[[packages]]
+id = "intel-e1r"
+description = "Intel I350 1GbE: 366FLR, 361T, 366T, 361i"
+# cp067482: HPE Intel E1R Driver for Windows Server 2025, 14.1.24.0
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p2003524495/v269632/cp067482.exe"
+sha256 = "fb6f1c2a3c3b58ec51bca36d4f02c4964fb1662d2c822492425cfc29116af889"
+
+[[packages]]
+id = "intel-ixs"
+description = "Intel 82599/X540/X550 10GbE: 560SFP+, 560FLR-SFP+, 561T, 561FLR-T, 562T"
+# cp067485: HPE Intel ixs Driver for Windows Server 2025, 4.2.7.0
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p778022694/v269635/cp067485.exe"
+sha256 = "724ad3e931ca6f99b489aeffe448d0555bb889a48e7ff423f9217310a63757c1"
+
+[[packages]]
+id = "intel-x520-x540"
+description = "Intel 82599 and X540 10GbE: 560SFP+, 560FLR-SFP+, 561T, 561FLR-T"
+# HPE's current ixs component dropped these chips and Windows 11 has no inbox
+# driver. This is Intel's last release for them (PROSet 22.0), repackaged by
+# Dell; the driver is not OEM-specific.
+# Dell X9PPT 22.0.0: Intel NIC Family Version 22.0.0 Drivers for Windows Server 2019 and 2022 Operating Systems
+url = "https://downloads.dell.com/FOLDER09683951M/2/Network_Driver_X9PPT_WN64_22.0.0_A00_01.EXE"
+sha256 = "8d876870fa95c3cc68e02d08745a3c0a73b98fea0cb383e41546a2f474793bd6"
+include = ["*/Winx64/PROXGB/NDIS68/ixn68x64.inf", "*/Winx64/PROXGB/NDIS68/ixt68x64.inf"]
+
+[[packages]]
+id = "intel-i40ea"
+description = "Intel X710/XL710/XXV710 (Intel-branded)"
+# cp072283: Intel i40ea Driver for Windows Server 2025, 1.25.117.0
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p1443058185/v287039/cp072283.exe"
+sha256 = "cf9c0d628df133003960da4f03ecdd1bcdc54f70aa169b82e53954e16cd45504"
+
+[[packages]]
+id = "intel-i40eb"
+description = "Intel X710 10GbE: 562SFP+, 562FLR-SFP+"
+# cp072274: HPE Intel i40eb Driver for Windows Server 2025, 1.25.110.0
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p1384350988/v287030/cp072274.exe"
+sha256 = "a625b098d01091bd983054ea3fed5679900f29fef0385c5f2af3df4a14ac00de"
+
+[[packages]]
+id = "qlogic-nx2"
+description = "QLogic 57810 10GbE: 530T, 530SFP+, 533FLR-T, 534FLR-SFP+"
+# cp064708: HPE QLogic NX2 10/20 GbE Multifunction Drivers for Windows Server x64 Editions, 7.13.221.0
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p1976543217/v259758/cp064708.exe"
+sha256 = "b726e60fa7fb4b35d39f9ff276766c5a74fdfbd8a153c5e5b4ba7ffcdfc1f207"
+
+[[packages]]
+id = "qlogic-fastlinq"
+description = "QLogic FastLinQ QL41xxx/QL45xxx 10/25/50/100GbE: 521T, 524SFP+, 621SFP28, 622FLR, 620QSFP28"
+# cp066297: HPE QLogic FastLinQ 10/25/50 GbE Drivers for Windows Server x64 Editions, 8.72.21.0(B)
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p1978240019/v264710/cp066297.exe"
+sha256 = "675c4a6065a199613a212474c815bde7bebf3de529088699c9e5acb25642d685"
+
+[[packages]]
+id = "mellanox-winof2"
+description = "Mellanox ConnectX-4 Lx / ConnectX-5 / ConnectX-6: 640SFP28, 640FLR-SFP28, 842QSFP28, MCX631/MCX623"
+# cp072197: HPE Mellanox CX4LX and CX5 Driver for Microsoft Windows Server 2025, 26.4.27095.0
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p1768928387/v286725/cp072197.exe"
+sha256 = "45c26b2b5f7cacdd9e2498ed1fca668f1916ddf5b7967d0d3615cfda17a5e215"
+
+[[packages]]
+id = "qlogic-fc"
+description = "QLogic SN1100Q/SN1600Q (QLE269x/QLE277x) Fibre Channel HBAs"
+# cp070602: HPE Storage Fibre Channel Adapter Kit for the x64 QLogic Storport Driver for Windows Server 2025, 9.4.11.20(c)
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p253438872/v280731/cp070602.exe"
+sha256 = "4cdf252226f0ee766177bc04a4b5afb0fe88f2db867c48fb8cb39dccec23d262"
+
+[[packages]]
+id = "emulex-fc"
+description = "Emulex SN1200E/SN1600E (LPe31000/LPe35000) Fibre Channel HBAs"
+# HPE's Emulex Smart Component (cp070317) wraps the driver in a Tarma installer
+# that drivers.py can't unpack. This is the same Broadcom (Emulex) driver kit,
+# repackaged by Dell; the driver is not OEM-specific.
+# Dell 8XGGG 12.34.10: Emulex Fibre Channel Adapter Drivers and Software Application for Windows.
+url = "https://downloads.dell.com/FOLDER14069762M/3/Fibre-Channel_Driver_8XGGG_WN64_12.34.10_A00-00_02.EXE"
+sha256 = "c9606a3d6e28e1852b2f3bfbb47c40461648c62bc2f58a18524c1dc07dfb1ecc"
+include = ["*/x64/Win2025/*"]
+
+[[packages]]
+id = "matrox-video"
+description = "Matrox G200eH3 (iLO 5 video)"
+# cp069739: Matrox G200eH3 Video Controller Driver for Microsoft Windows 64-bit, 9.15.1.268(E)
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p2027055306/v277672/cp069739.exe"
+sha256 = "044990fed406c368ad87b742fa1f26ef4647b1909c97c366922f6f3815d1e95b"
+
+[[packages]]
+id = "ilo5-chif"
+description = "iLO 5 Channel Interface (used by HPE management tools)"
+# cp069724: iLO 5 Channel Interface Driver for Microsoft Windows Server 2025, 4.7.2.0(D)
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p182185341/v277644/cp069724.exe"
+sha256 = "6cb66d60b8b19fea7f1dd6b1395482b809e7914a9dd69797436fe2431d9d5a87"
+
+[[packages]]
+id = "ilo5-asr"
+description = "iLO 5 Automatic Server Recovery (watchdog)"
+# cp069726: iLO 5 Automatic Server Recovery Driver for Microsoft Windows Server 2025, 4.7.2.0(D)
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p144750151/v277646/cp069726.exe"
+sha256 = "02d38376c18d1911600c94d899e1bf0e79e6235b53ad5c906374ca7f1fdcf315"
+
+[[packages]]
+id = "intel-chipset"
+description = "Intel C620 (Lewisburg) chipset and Xeon Scalable identifiers"
+# cp072294: Identifiers for Intel Xeon Scalable Processors (First and Second Generation) for Microsoft Windows, 10.1.19006.8299(H)
+url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p399914327/v287091/cp072294.exe"
+sha256 = "55e4ae14c098b45d03384662a2a80bc8848a9f37541e155f6d8884d4d7a331fe"
+
+# Storage
+[[devices]]
+name = "Smart Array P408i-a/P816i-a/E208i (SmartPQI)"
+ids = ["PCI\\VEN_9005&DEV_028F"]
+[[devices]]
+name = "Smart Array S100i SR (C620 SATA/sSATA in RAID mode)"
+ids = ["PCI\\VEN_8086&DEV_A186&SUBSYS_00E51590", "PCI\\VEN_8086&DEV_A1D6&SUBSYS_00E61590", "PCI\\VEN_8086&DEV_A206&SUBSYS_00E51590", "PCI\\VEN_8086&DEV_A256&SUBSYS_00E61590"]
+[[devices]]
+name = "Onboard SATA (AHCI)"
+ids = ["PCI\\CC_010601"]
+[[devices]]
+name = "NVMe drives"
+ids = ["PCI\\CC_010802"]
+# Network
+[[devices]]
+name = "Broadcom BCM5719 1GbE (331i/331FLR/331T)"
+ids = ["PCI\\VEN_14E4&DEV_1657"]
+[[devices]]
+name = "Broadcom BCM5720 1GbE (332T)"
+ids = ["PCI\\VEN_14E4&DEV_165F"]
+[[devices]]
+name = "Broadcom BCM57414 25GbE (631SFP28)"
+ids = ["PCI\\VEN_14E4&DEV_16D7"]
+[[devices]]
+name = "Broadcom BCM57416 10GBASE-T (535T)"
+ids = ["PCI\\VEN_14E4&DEV_16D8"]
+[[devices]]
+name = "Intel I350 1GbE (366FLR/361T)"
+ids = ["PCI\\VEN_8086&DEV_1521"]
+[[devices]]
+name = "Intel 82599 10GbE (560SFP+)"
+ids = ["PCI\\VEN_8086&DEV_10FB"]
+[[devices]]
+name = "Intel X540 10GBASE-T (561T)"
+ids = ["PCI\\VEN_8086&DEV_1528"]
+[[devices]]
+name = "Intel X550 10GBASE-T (562T)"
+ids = ["PCI\\VEN_8086&DEV_1563"]
+[[devices]]
+name = "Intel X710 10GbE (562SFP+)"
+ids = ["PCI\\VEN_8086&DEV_1572"]
+[[devices]]
+name = "Intel XXV710 25GbE"
+ids = ["PCI\\VEN_8086&DEV_158B"]
+[[devices]]
+name = "QLogic 57810 10GbE (530T/533FLR)"
+ids = ["PCI\\VEN_14E4&DEV_168E"]
+[[devices]]
+name = "QLogic FastLinQ QL41xxx (521T/621SFP28)"
+ids = ["PCI\\VEN_1077&DEV_8070"]
+[[devices]]
+name = "QLogic FastLinQ QL45xxx (620QSFP28)"
+ids = ["PCI\\VEN_1077&DEV_1644", "PCI\\VEN_1077&DEV_1656"]
+[[devices]]
+name = "Mellanox ConnectX-4 Lx (640SFP28)"
+ids = ["PCI\\VEN_15B3&DEV_1015"]
+[[devices]]
+name = "Mellanox ConnectX-5 (842QSFP28)"
+ids = ["PCI\\VEN_15B3&DEV_1017"]
+[[devices]]
+name = "Mellanox ConnectX-6 Lx"
+ids = ["PCI\\VEN_15B3&DEV_101F"]
+# Other
+[[devices]]
+name = "QLogic SN1100Q/SN1600Q FC"
+ids = ["PCI\\VEN_1077&DEV_2261"]
+[[devices]]
+name = "Emulex SN1200E/SN1600E FC"
+ids = ["PCI\\VEN_10DF&DEV_F400"]
+[[devices]]
+name = "Matrox G200eH3 (iLO 5 video)"
+ids = ["PCI\\VEN_102B&DEV_0538"]
+[[devices]]
+name = "iLO 5 Channel Interface"
+ids = ["PCI\\VEN_103C&DEV_3307"]

@@ -32,6 +32,8 @@ import xml.etree.ElementTree as ET
 import zlib
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
+UNPACK_VERSION = 2  # bump when unpacking changes: cached extractions are keyed on it
+HTTP_TIMEOUT = 120  # seconds without data before a download fails
 USER_AGENT = "windows-image-build"  # some download sites challenge browser-like agents
 
 # The OS the image runs: Windows 11 25H2, client (product type 1), x64.
@@ -103,8 +105,13 @@ def parse_decoration(dec):
         s = s.strip()
         return int(s, 16) if s.lower().startswith("0x") else (int(s) if s else None)
 
-    return {"text": dec.strip(), "arch": m.group(1).lower(), "major": num(fields[0]), "minor": num(fields[1]),
-            "product_type": num(fields[2]), "suite": num(fields[3]), "build": num(fields[4])}
+    try:
+        values = [num(f) for f in fields]
+    except ValueError:
+        return None  # not a valid decoration: Windows ignores it too
+
+    return {"text": dec.strip(), "arch": m.group(1).lower(), "major": values[0], "minor": values[1],
+            "product_type": values[2], "suite": values[3], "build": values[4]}
 
 
 def decoration_status(d):
@@ -316,16 +323,17 @@ def unpack_burn(bundle, folder):
             while at != -1 and int.from_bytes(data[at + 8:at + 12], "little") != size:
                 at = data.find(b"MSCF\0\0\0\0", at + 1)
             if at != -1:
-                cab = folder / f"{c.get('Id')}.cab"
+                cab = folder / "attached-container.cab"
                 cab.write_bytes(data[at:at + size])
                 run(["7z", "x", "-y", "-bso0", "-bsp0", cab, f"-o{folder}"])
                 cab.unlink()
     base = folder.resolve()
     for p in root.iter():
         if p.tag.endswith("Payload") and p.get("SourcePath") and p.get("FilePath"):
-            src = folder / p.get("SourcePath")
+            # Names come from the download: both ends must stay inside the folder.
+            src = (folder / p.get("SourcePath").replace("\\", "/")).resolve()
             dst = (folder / p.get("FilePath").replace("\\", "/")).resolve()
-            if src.is_file() and base in dst.parents:  # names come from the download: stay inside
+            if base in src.parents and base in dst.parents and src.is_file():
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 src.rename(dst)
 
@@ -349,7 +357,13 @@ def unpack(path, out, depth=0, log=None):
             unpacked = carve_embedded_msi(path, out)  # InstallShield: keep real file names
         elif any(t in ARCHIVE_TYPES for t in types):
             out.mkdir(parents=True, exist_ok=True)
-            unpacked = run(["7z", "x", "-y", "-p-", "-bso0", "-bsp0", path, f"-o{out}"])[0] or any(out.iterdir())
+            # 7-Zip exits 1 for warnings, 2 and above for errors (corrupt data,
+            # disk full): fail rather than cache a partial extraction.
+            r = subprocess.run(["7z", "x", "-y", "-p-", "-bso0", "-bsp0", str(path), f"-o{out}"],
+                               capture_output=True, text=True, errors="replace")
+            if r.returncode > 1:
+                raise SystemExit(f"7z failed (exit {r.returncode}) on {path}:\n{r.stderr[-1500:]}")
+            unpacked = True
             unpack_burn(path, out)
     if not unpacked:
         return False
@@ -357,8 +371,11 @@ def unpack(path, out, depth=0, log=None):
         log.append(f"{'  ' * depth}{path.name}")
     if depth < 6:
         for child in sorted(out.rglob("*")):
+            # Files next to an INF belong to that driver package (co-installers,
+            # utilities): unpacking would delete them.
             if (child.is_file() and child.suffix.lower() in CANDIDATE_SUFFIXES
-                    and child.stat().st_size > 20_000 and not child.name.lower().endswith(".inf")):
+                    and child.stat().st_size > 20_000 and not child.name.lower().endswith(".inf")
+                    and not any(sib.suffix.lower() == ".inf" for sib in child.parent.iterdir())):
                 if unpack(child, child.parent / (child.name + ".x"), depth + 1, log):
                     child.unlink()
     return True
@@ -383,7 +400,7 @@ def download(url, sha256, cache):
         return dest
     tmp = dest.with_suffix(dest.suffix + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req) as r, open(tmp, "wb") as f:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r, open(tmp, "wb") as f:
         shutil.copyfileobj(r, f, 1 << 20)
     actual = sha256sum(tmp)
     if actual != sha256:
@@ -408,8 +425,37 @@ def short_name(rel):
     return name[-40:].lstrip("-_.") or "drv"
 
 
+BOOT_DIR = "$WinPEDriver$"  # Windows Setup installs drivers from this CD folder as boot drivers
+
+
+def load_variant(path, _seen=()):
+    """Read a variant file and merge the variants it includes.
+
+    Returns the variant table plus flat lists of packages and devices. Each
+    package gets a "key": its id, or "<included variant>/<id>" for packages
+    from an included variant, which is also its directory under the output.
+    """
+    path = pathlib.Path(path).resolve()
+    if path in _seen:
+        raise SystemExit(f"variant include loop: {' -> '.join(p.name for p in (*_seen, path))}")
+    data = tomllib.loads(path.read_text())
+    name = data["variant"]["name"]
+    if name != path.stem:
+        raise SystemExit(f"[variant] name {name!r} must match the file name {path.name!r}")
+    packages = [dict(pkg, key=pkg["id"]) for pkg in data.get("packages", [])]
+    devices = list(data.get("devices", []))
+    for inc in data["variant"].get("includes", []):
+        sub_variant = load_variant(path.parent / f"{inc}.toml", (*_seen, path))
+        packages += [dict(pkg, key=f"{inc}/{pkg['key']}") for pkg in sub_variant["packages"]]
+        devices += [dict(dev, name=f"{inc}: {dev['name']}") for dev in sub_variant["devices"]]
+    keys = [pkg["key"] for pkg in packages]
+    if len(keys) != len(set(keys)):
+        raise SystemExit(f"{path.name}: duplicate package ids: {sorted({k for k in keys if keys.count(k) > 1})}")
+    return {"variant": data["variant"], "packages": packages, "devices": devices}
+
+
 def cmd_fetch(args):
-    variant = tomllib.loads(pathlib.Path(args.variant).read_text())
+    variant = load_variant(args.variant)
     name = variant["variant"]["name"]
     out = pathlib.Path(args.output or REPO / "drivers" / name)
     cache = pathlib.Path(args.cache or REPO / ".cache" / "drivers")
@@ -419,26 +465,38 @@ def cmd_fetch(args):
     report = [f"# Drivers for {name}", "", variant["variant"].get("description", ""), "",
               f"Checked against Windows 11 build {TARGET_BUILD}, x64, client.", ""]
     manifest, failures = [], []
+    staged = {}  # (package sha256, INF path in package) -> package key
     for pkg in variant["packages"]:
-        pid = pkg["id"]
+        pid = pkg["key"]
+        # Boot-critical drivers (storage controllers the node may boot from
+        # with no inbox driver) go where Windows Setup installs them as boot
+        # drivers; everything else is staged after installation.
+        base = out / BOOT_DIR if pkg.get("boot_critical") else out
         print(f"==> {pid}: {pkg['url'].rsplit('/', 1)[-1]}", flush=True)
         src = download(pkg["url"], pkg["sha256"].lower(), cache / "downloads")
-        work = cache / "extract" / pkg["sha256"][:16]
+        work = cache / "extract" / f"{pkg['sha256'][:16]}-v{UNPACK_VERSION}"
         if not (work / ".done").exists():
             shutil.rmtree(work, ignore_errors=True)
             if not unpack(src, work / "root"):
                 raise SystemExit(f"{pid}: could not unpack {src.name}")
             (work / ".done").touch()
         root = work / "root"
-        infs = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".inf"]
+        infs = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".inf")
         inc, exc = pkg.get("include", ["**"]), pkg.get("exclude", [])
         infs = [p for p in infs if any(fnmatch.fnmatch(str(p.relative_to(root)), g) for g in inc)
                 and not any(fnmatch.fnmatch(str(p.relative_to(root)), g) for g in exc)]
         infos = [analyse_inf(p) for p in infs]
+        # Included variants can share a package: stage each INF once.
+        for i in infos:
+            first = staged.get((pkg["sha256"], i["path"]))
+            if i["applies"] and first:
+                i.update(applies=False, reason=f"already staged by {first}")
+            elif i["applies"]:
+                staged[(pkg["sha256"], i["path"])] = pid
         applicable = [i for i in infos if i["applies"]]
         keep = {pathlib.Path(i["path"]) for i in applicable}
         for i, d in enumerate(select_driver_dirs(infos)):
-            dest = out / pid / f"{i:02d}-{short_name(d.relative_to(root))}"
+            dest = base / pid / f"{i:02d}-{short_name(d.relative_to(root))}"
             shutil.copytree(d, dest)
             # Drop INFs Windows 11 would reject or the variant didn't include,
             # so only intended drivers are staged and the build log stays clean.
@@ -446,7 +504,8 @@ def cmd_fetch(args):
                 if p.suffix.lower() == ".inf" and d / p.relative_to(dest) not in keep:
                     p.unlink()
         hwids = sorted({h for i in applicable for h in i["hardware_ids"]})
-        report += [f"## {pid}", "", pkg.get("description", ""), "",
+        report += [f"## {pid}" + (" (boot-critical)" if pkg.get("boot_critical") else ""), "",
+                   pkg.get("description", ""), "",
                    f"Source: {pkg['url']}", "",
                    f"{len(applicable)} of {len(infos)} INFs apply to Windows 11; {len(hwids)} hardware IDs.", ""]
         for i in sorted(infos, key=lambda i: i["path"]):
@@ -455,16 +514,21 @@ def cmd_fetch(args):
             report.append(f"* `{rel}` [{i['class']}, {i['driver_ver']}]: {state}")
         report.append("")
         manifest.append({"id": pid, "url": pkg["url"], "sha256": pkg["sha256"],
+                         "boot_critical": bool(pkg.get("boot_critical")),
                          "infs": [{**i, "path": str(pathlib.Path(i["path"]).relative_to(root))} for i in infos]})
         print(f"    {len(applicable)}/{len(infos)} INFs apply to Windows 11, {len(hwids)} hardware IDs")
-        if pkg.get("required", True) and not applicable:
-            failures.append(pid)
+        if pkg.get("required", True) and not any(i["applies"] or i["reason"].startswith("already staged") for i in infos):
+            failures.append(f"no Windows 11 driver in required package {pid}")
+    # The build CD uses Joliet names, limited to 64 characters per path component.
+    too_long = [str(p.relative_to(out)) for p in out.rglob("*") if len(p.name) > 64]
+    if too_long:
+        failures.append("path components over 64 characters (Joliet limit): " + ", ".join(too_long[:5]))
     (out / "REPORT.md").write_text("\n".join(report) + "\n")
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     print(f"\nWrote {out} ({size / 1e6:.0f} MB); see {out / 'REPORT.md'}")
     if failures:
-        raise SystemExit("No Windows 11 driver found in required package(s): " + ", ".join(failures))
+        raise SystemExit("fetch failed:\n  " + "\n  ".join(failures))
 
 
 def cmd_check_infs(args):
@@ -514,7 +578,8 @@ def inbox_infs(source, cache):
     source = pathlib.Path(source)
     if source.is_dir():
         return source
-    out = cache / "inbox" / hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
+    st = source.stat()  # mount points get reused for different ISOs: key on the WIM itself
+    out = cache / "inbox" / hashlib.sha256(f"{source.resolve()}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:16]
     if not (out / ".done").exists():
         shutil.rmtree(out, ignore_errors=True)
         out.mkdir(parents=True)
@@ -535,7 +600,11 @@ def hwid_index(root, inbox):
         if p.is_file() and p.suffix.lower() == ".inf":
             i = analyse_inf(p, inbox=inbox)
             if i["applies"]:
-                label = p.name if inbox else p.relative_to(root).parts[0]
+                # Staged: the package key, i.e. the path up to the "NN-" driver folder.
+                parts = p.relative_to(root).parts
+                label = p.name if inbox else "/".join(
+                    x for x in parts[:next((n for n, x in enumerate(parts) if re.match(r"\d\d-", x)), 1)]
+                    if x != BOOT_DIR)
                 for h in i["hardware_ids"]:
                     index.setdefault(h, set()).add(label)
     return index
@@ -548,7 +617,7 @@ def matches(index, pattern):
 
 
 def cmd_coverage(args):
-    variant = tomllib.loads(pathlib.Path(args.variant).read_text())
+    variant = load_variant(args.variant)
     name = variant["variant"]["name"]
     cache = pathlib.Path(args.cache or REPO / ".cache" / "drivers")
     staged_dir = pathlib.Path(args.drivers or REPO / "drivers" / name)
@@ -557,12 +626,13 @@ def cmd_coverage(args):
     inbox = hwid_index(inbox_infs(args.inbox, cache), inbox=True)
     staged = hwid_index(staged_dir, inbox=False)
     missing = []
-    print(f"{'Device':42} {'Windows 11 inbox':28} Staged by this variant")
-    for dev in variant.get("devices", []):
+    width = max([len(d["name"]) for d in variant["devices"]] + [6])
+    print(f"{'Device':{width}} {'Windows 11 inbox':28} Staged by this variant")
+    for dev in variant["devices"]:
         ib = sorted({x for pat in dev["ids"] for x in matches(inbox, pat)})
         st = sorted({x for pat in dev["ids"] for x in matches(staged, pat)})
         flag = "" if (ib or st) else ("  <-- NOT COVERED" if dev.get("required", True) else "  (not covered, optional)")
-        print(f"{dev['name'][:42]:42} {', '.join(ib)[:28] or '-':28} {', '.join(st) or '-'}{flag}")
+        print(f"{dev['name']:{width}} {', '.join(ib)[:28] or '-':28} {', '.join(st) or '-'}{flag}")
         if not (ib or st) and dev.get("required", True):
             missing.append(dev["name"])
     if missing:
@@ -574,7 +644,7 @@ def download_catalog(cache):
     cache.mkdir(parents=True, exist_ok=True)
     dest = cache / "Catalog.xml.gz"
     req = urllib.request.Request("https://downloads.dell.com/catalog/Catalog.xml.gz", headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r, open(dest, "wb") as f:
         shutil.copyfileobj(r, f)
     return dest
 

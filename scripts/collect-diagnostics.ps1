@@ -2,8 +2,10 @@
 #
 # Run in an elevated PowerShell on the node:
 #   powershell -ExecutionPolicy Bypass -File collect-diagnostics.ps1
-# and send the zip it prints. Contains no passwords: cloudbase-init does not
-# log them, and metadata is checked for reachability only, not saved.
+# and send the zip it prints. It doesn't collect passwords on purpose:
+# cloudbase-init doesn't log admin_pass, and metadata is only checked for
+# reachability, not saved. But the cloudbase-init logs include user-data script
+# output, so check them before sharing if your user data handles secrets.
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'

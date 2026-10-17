@@ -57,9 +57,16 @@ packer build \
   locale variables (`ui_language`, `input_locale`, `system_locale`,
   `user_locale`, default `en-GB`) must match a language on the ISO. See
   [Checking the ISO](#checking-the-iso).
-* `product_key` defaults to the public Windows 11 Enterprise KMS client key
-  (GVLK), or to no key when `image_name` contains `Evaluation`. Without a key,
-  Setup stops at the product key page on non-evaluation media.
+* `product_key` defaults to Microsoft's public KMS client key (GVLK) for the
+  edition in `image_name` (Enterprise, Education, Pro and their N variants),
+  or to no key when `image_name` contains `Evaluation`. For any other edition,
+  set `product_key`: without a valid key, Setup stops at the product key page
+  and the build waits until it times out.
+* `remote_local_admin` (default `false`) controls whether the local admin
+  account can manage a node remotely with full rights (WinRM, Ansible, admin
+  shares). By default UAC remote restrictions stay on, as cloudbase-init
+  intends: RDP works, but remote admin needs a domain account. Set it to
+  `true` for nodes you manage over WinRM as `Admin`.
 * To include drivers for specific hardware, build a variant with
   `scripts/build-variant.sh` instead; see [Hardware variants](#hardware-variants).
 * To watch the install, run with `-var headless=false`, or connect a VNC
@@ -126,6 +133,8 @@ model can contain. Known variants:
 |---|---|
 | `dell-poweredge-r740xd` | Dell PowerEdge R740xd (SKU 0737), every NIC, storage and FC option Dell lists for it, including Mellanox ConnectX-3 to ConnectX-7 |
 | `dell-precision-7960-rack` | Dell Precision 7960 Rack, from Dell's Windows 11 driver pack |
+| `hpe-proliant-dl360-gen10` | HPE ProLiant DL360 Gen10, every NIC, Smart Array, FC and iLO option HPE lists for it |
+| `dell-hpe-servers` | Both servers above in one image (see [One image for several models](#one-image-for-several-models)) |
 
 Build one with:
 
@@ -149,10 +158,50 @@ Extra arguments are passed to `packer build`.
   x64 will accept. Server-only INFs (decorated `NTamd64.10.0.3`) are silently
   ignored by Windows 11, so they're dropped and reported rather than staged;
 * writes the drivers to `drivers/<variant>/` with a `REPORT.md` listing every
-  INF and why it was kept or dropped.
+  INF and why it was kept or dropped. Packages marked `boot_critical` go under
+  `drivers/<variant>/$WinPEDriver$/` instead (see
+  [Boot-critical drivers](#boot-critical-drivers)).
 
 The build then stages every driver into the image, so Windows finds them when
 it detects the node's hardware on first boot.
+
+#### One image for several models
+
+A variant can include others:
+
+```toml
+[variant]
+name = "dell-hpe-servers"
+description = "Dell PowerEdge R740xd and HPE ProLiant DL360 Gen10."
+includes = ["dell-poweredge-r740xd", "hpe-proliant-dl360-gen10"]
+```
+
+`fetch` and `coverage` merge the included variants' packages and devices
+(a variant can have its own as well). Each package's drivers go under
+`drivers/<variant>/<included variant>/<package>/`, and `coverage` prefixes
+device names with the variant they came from. When two included variants use
+the same package, each INF is staged once and `REPORT.md` notes the duplicate.
+
+One image for every model is usually the better choice: Windows only binds a
+staged driver to hardware that is present, so another vendor's drivers cost
+only disk space (the R740xd and DL360 Gen10 drivers add about 120 MB). Use
+a per-model variant when a model needs something that conflicts with another
+model, such as a different driver version for the same chip: the combined
+image would stage both, and Windows would pick one by its own ranking.
+
+#### Boot-critical drivers
+
+A driver staged in the driver store is installed when Windows first detects
+the device, which is too late for the controller Windows boots from. If the
+boot controller has no inbox Windows 11 driver, mark its package
+`boot_critical = true`. `fetch` then writes it to a `$WinPEDriver$` folder at
+the root of the build CD, and Windows Setup installs everything there into the
+image as a boot driver (service start type boot, ready for the hardware IDs in
+its INF), so the deployed node can boot from that controller.
+
+The included variants mark the two software RAID controllers this way: Dell
+PERC S140 and HPE Smart Array S100i. Everything else they can boot from has
+an inbox driver, which `coverage` shows.
 
 #### Checking coverage
 
@@ -183,17 +232,20 @@ Emulex LPe31000/32000 FC                   -                            emulex-f
 ...
 ```
 
-Every R740xd boot controller (PERC 9/10, HBA330, BOSS-S1, NVMe) has a Windows
-11 inbox driver, which matters because a driver staged into the image may not
-load early enough to boot from.
+Every R740xd boot controller except PERC S140 software RAID (PERC 9/10,
+HBA330, BOSS-S1, NVMe) has a Windows 11 inbox driver. That matters because a
+driver staged into the image is installed too late to boot from; PERC S140 is
+handled as a [boot-critical driver](#boot-critical-drivers).
 
 #### Adding a variant
 
 1. Copy an existing file in `variants/` and fill in `[variant]`, then one
    `[[packages]]` entry per driver package (`id`, `description`, `url`,
-   `sha256`, and optionally `include` globs to pick INFs, matched against
-   their path inside the unpacked package, and `required = false`).
-2. For Dell servers, `drivers.py dell-catalog` lists the newest Windows driver
+   `sha256`, and optionally `include`/`exclude` patterns to pick INFs, and
+   `required = false`). Patterns use Python `fnmatch` against each INF's path
+   inside the unpacked package: case-sensitive, and `*` also matches `/`.
+   The file name must match `[variant] name`.
+2. To find packages for Dell servers, `drivers.py dell-catalog` lists the newest Windows driver
    package per family for a system ID, ready to paste. The system ID is the
    `SKU` in the node's Ironic inventory, e.g. `SKU=0737` for the R740xd:
 
@@ -206,6 +258,16 @@ load early enough to boot from.
    accepts. For Dell clients and workstations, use the per-model Windows 11
    driver packs in `https://downloads.dell.com/catalog/DriverPackCatalog.cab`,
    as `variants/dell-precision-7960-rack.toml` does.
+
+   For HPE servers, use the Smart Components (`cpNNNNNN.exe`) HPE lists for
+   the model: search for it at <https://support.hpe.com>, choose *Drivers and
+   Software* and Windows Server 2022 or 2025, and keep the drivers (not
+   firmware or management agents). Each component's page gives a stable
+   `downloads.hpe.com/pub/softlib2/...` URL and its SHA-256. The Service Pack
+   for ProLiant lists the same components. As with Dell, these are Windows
+   Server drivers, and some components are wrapped in installers `drivers.py`
+   can't unpack (e.g. HPE's Emulex kit); `variants/hpe-proliant-dl360-gen10.toml`
+   uses the same driver from another vendor's package instead.
 3. Add `[[devices]]` entries with the PCI IDs (`PCI\VEN_xxxx&DEV_xxxx`) or class
    codes (`PCI\CC_xxxxxx`) of the hardware the model can contain, run `fetch`
    and `coverage`, and read `drivers/<variant>/REPORT.md`.
@@ -235,7 +297,7 @@ Joliet names.
    customised: the build never creates OOBE's temporary account or per-user
    app state for build accounts. Images customised after OOBE give the first
    user to sign in on a deployed node a broken taskbar: Explorer crashes and
-   the screen stays black after "Almost there".
+   the screen stays black after the "Almost there" screen.
 3. At that audit-mode sign-in, `setup-winrm.ps1` runs from the CD and Packer
    connects over WinRM.
 4. Provisioners then, in order:
@@ -259,7 +321,9 @@ Joliet names.
    * Removes the build-only Windows Update and Store auto-update policies and
      the autologon. Consumer features stay disabled.
    * Removes the WinRM HTTP listener, Basic auth, unencrypted access and the
-     WinRM firewall rules.
+     build's WinRM firewall rule, and disables the inbox WinRM HTTP rules.
+   * Restores UAC remote restrictions (unless `remote_local_admin` is set),
+     which `Enable-PSRemoting` turned off.
    * Gives the built-in Administrator a random password and disables it
      (unless `cloudbase_init_username` is `Administrator`).
    * Deletes Setup's cached copies of the build answer file, which hold the
@@ -395,18 +459,18 @@ It writes `C:\diag-<host>-<time>.zip` containing:
 * a metadata-service reachability check;
 * the last three days of event logs.
 
-The zip contains no passwords.
+It doesn't collect passwords on purpose, but the cloudbase-init logs include
+the output of user-data scripts: check them before sharing if your user data
+handles secrets.
 
 ## Limitations
 
-* **Boot-critical storage drivers.** Vendor drivers are staged in the driver
-  store while Windows is running. That is enough for NICs and for storage that
-  isn't the boot disk. If a node boots from a controller with no inbox Windows
-  11 driver, test a deploy: it may need the driver injected offline with
-  `dism /Add-Driver` to avoid `INACCESSIBLE_BOOT_DEVICE`. `drivers.py
-  coverage` shows which controllers have inbox drivers. On the R740xd all do;
-  booting from PERC S140 software RAID (staged driver only) is untested, as is
-  Intel VROC RAID on the Precision 7960.
+* **Boot-critical storage drivers are untested on hardware.** Booting from
+  PERC S140 or Smart Array S100i software RAID relies on the
+  [`boot_critical`](#boot-critical-drivers) install, which has been checked in
+  the image but not on a node. Intel VROC RAID on the Precision 7960 comes in
+  a driver pack that isn't marked boot-critical, so booting from it may fail
+  with `INACCESSIBLE_BOOT_DEVICE`.
 * **Variant drivers are checked, not hardware-tested.** `fetch` checks that
   Windows 11 accepts each INF, and `coverage` that each listed device has a
   driver, but neither proves the hardware works: test a deploy on each new
@@ -423,10 +487,8 @@ The zip contains no passwords.
   random password and disabled before sysprep. Use a fresh random
   `build_password` per build (as above) and never reuse a real credential.
 * **SSH keys** are not applied: OpenSSH Server isn't installed.
-* **Build-time update check.** Windows 11 OOBE in the build VM shows "Checking
-  for updates" and may download a zero-day update from Microsoft. It needs
-  internet access, and it is the most variable part of the build time
-  (builds took 47–49 minutes on a nested-KVM host).
+* **Build time.** Builds take about 55–60 minutes on a nested-KVM host and
+  need internet access for the virtio-win and cloudbase-init downloads.
 * **Profile error in specialize.** cloudbase-init creates `Admin` in the
   specialize pass, before Windows can load user profiles, so
   `cloudbase-init-unattend.log` shows a `LoadUserProfile` "device is not

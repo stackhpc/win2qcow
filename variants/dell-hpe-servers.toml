@@ -1,0 +1,14 @@
+# One image for every server we deploy: the Dell PowerEdge R740xd and the HPE
+# ProLiant DL360 Gen10.
+#
+# A variant can include others: their packages and devices are merged, each
+# package's drivers going under drivers/<this variant>/<included variant>/.
+# Windows only binds a staged driver to hardware that's present, so drivers
+# for other vendors' devices cost nothing but space. To support another
+# server, write its own variant (see "Adding a variant" in the README), check
+# it with `scripts/drivers.py coverage`, and add it to `includes`.
+
+[variant]
+name = "dell-hpe-servers"
+description = "Dell PowerEdge R740xd and HPE ProLiant DL360 Gen10."
+includes = ["dell-poweredge-r740xd", "hpe-proliant-dl360-gen10"]

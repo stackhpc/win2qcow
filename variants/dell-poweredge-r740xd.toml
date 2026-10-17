@@ -12,7 +12,8 @@
 #
 # Not listed because Windows 11 has an inbox driver (see [[devices]]):
 #   QLogic 57800/57810 (netevbda), Mellanox ConnectX-3/3 Pro (mlx4_bus), and
-#   every boot storage option (PERC 9/10, HBA330, BOSS-S1 AHCI, NVMe).
+#   every boot storage option except PERC S140 (PERC 9/10, HBA330, BOSS-S1
+#   AHCI, NVMe).
 
 [variant]
 name = "dell-poweredge-r740xd"
@@ -113,6 +114,9 @@ description = "PERC S140 software RAID"
 # Dell 85R54 5.11.0.0003: Windows Server 2022 64bit driver for PERC S140 Controller
 url = "https://downloads.dell.com/FOLDER11422921M/1/SAS-RAID_Driver_85R54_WN64_5.11.0.0003_A00.EXE"
 sha256 = "aed7e43b8b1400dab9d96864a8b7978cd348fbd2755566c779b5b656bff4af5c"
+# No inbox driver: installed as a boot driver so the node can boot from an
+# S140 volume (see "Boot-critical drivers" in the README).
+boot_critical = true
 
 [[packages]]
 id = "hba330"

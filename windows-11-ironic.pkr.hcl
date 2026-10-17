@@ -1,8 +1,9 @@
 packer {
   required_plugins {
     qemu = {
-      # shutdown_command behaviour depends on the plugin/SDK version; see sysprep.ps1.
-      version = "~> 1.1.7"
+      # Exact version: shutdown_command behaviour depends on the plugin/SDK
+      # version (see sysprep.ps1), so upgrade deliberately.
+      version = "= 1.1.7"
       source  = "github.com/hashicorp/qemu"
     }
   }
@@ -19,8 +20,7 @@ variable "iso_url" {
 
 variable "iso_checksum" {
   type        = string
-  default     = "none"
-  description = "ISO checksum, e.g. \"sha256:abc...\" or \"file:./SHA256SUMS\"."
+  description = "ISO checksum, e.g. \"sha256:abc...\" or \"file:./SHA256SUMS\". Required; \"none\" skips the check."
 }
 
 variable "image_name" {
@@ -33,7 +33,7 @@ variable "product_key" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "Product key for setup. Empty: none for evaluation images, otherwise the public Windows 11 Enterprise KMS client key (GVLK)."
+  description = "Product key for setup. Empty: none for evaluation images, otherwise the public KMS client key (GVLK) for the edition in image_name."
 }
 
 variable "build_password" {
@@ -128,6 +128,12 @@ variable "cloudbase_init_sha256" {
   default = "0e7fa42e0cbc0ce7657f85730b0c6cc7afc4087a3639df0ff51a721a0be19bd5"
 }
 
+variable "remote_local_admin" {
+  type        = bool
+  default     = false
+  description = "Let the local admin account manage nodes remotely (WinRM/Ansible, admin shares) with a full token, by turning off UAC remote restrictions (LocalAccountTokenFilterPolicy=1). Off: remote admin needs a domain account; RDP works either way."
+}
+
 variable "cloudbase_init_username" {
   type        = string
   default     = "Admin"
@@ -161,21 +167,31 @@ locals {
 
   cloudbase_init_dir = "C:\\Program Files\\Cloudbase Solutions\\Cloudbase-Init"
 
-  # Without a key, Setup stops at the product key page on non-evaluation media.
-  windows_11_enterprise_gvlk = "NPPR9-FWDCX-D2C8J-H872K-2YT43"
+  # Without a key, Setup stops at the product key page on non-evaluation media,
+  # and a key for the wrong edition does the same. Microsoft's public KMS
+  # client keys (GVLKs) per edition; other editions need product_key.
+  gvlks = {
+    "Windows 11 Enterprise"   = "NPPR9-FWDCX-D2C8J-H872K-2YT43"
+    "Windows 11 Enterprise N" = "DPH2V-TTNVB-4X9Q3-TJR4H-KHJW4"
+    "Windows 11 Education"    = "NW6C2-QMPVW-D7KKK-3GKT6-VCFB2"
+    "Windows 11 Education N"  = "2WH4N-8QGBV-H22JP-CT43Q-MDWWJ"
+    "Windows 11 Pro"          = "W269N-WFGWX-YVC9B-4J6C9-T83GX"
+    "Windows 11 Pro N"        = "MH37W-N47XK-V7XM9-C7227-GCQG9"
+  }
   product_key = (var.product_key != "" ? var.product_key :
-  strcontains(var.image_name, "Evaluation") ? "" : local.windows_11_enterprise_gvlk)
+  strcontains(var.image_name, "Evaluation") ? "" : lookup(local.gvlks, var.image_name, ""))
 
   # Values substituted into XML must be escaped.
   xml_build_password = replace(replace(replace(var.build_password, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+  xml_image_name     = replace(replace(replace(var.image_name, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
 
-  locale = {
+  locale = { for k, v in {
     ui_language   = var.ui_language
     input_locale  = var.input_locale
     system_locale = var.system_locale
     user_locale   = var.user_locale
     timezone      = var.timezone
-  }
+  } : k => replace(replace(replace(v, "&", "&amp;"), "<", "&lt;"), ">", "&gt;") }
 
   cloudbase_init_conf_vars = {
     install_dir = local.cloudbase_init_dir
@@ -223,13 +239,15 @@ source "qemu" "windows-11-ironic" {
 
   # Windows Setup picks up autounattend.xml from the root of any CD.
   cd_label = local.cd_label
+  # The drivers directory's contents go at the CD root, where Windows Setup
+  # finds $WinPEDriver$ (boot-critical drivers, see scripts/drivers.py).
   cd_files = [
     "${path.root}/scripts/setup-winrm.ps1",
-    local.vendor_drivers_dir,
+    "${local.vendor_drivers_dir}/*",
   ]
   cd_content = {
     "autounattend.xml" = templatefile("${path.root}/templates/autounattend.xml.pkrtpl", merge(local.locale, {
-      image_name     = var.image_name
+      image_name     = local.xml_image_name
       product_key    = local.product_key
       admin_password = local.xml_build_password
     }))
@@ -249,12 +267,13 @@ source "qemu" "windows-11-ironic" {
   winrm_use_ssl  = false
   winrm_insecure = true
 
-  # sysprep.ps1 is uploaded by the last provisioner. It hands sysprep to a
-  # scheduled task (outside the WinRM shell) and returns; sysprep powers the VM
-  # off when done.
+  # sysprep.ps1 is uploaded by the last provisioner. It starts itself again
+  # through WMI (outside the WinRM shell, which kills its processes on close)
+  # and returns; sysprep powers the VM off when done.
   shutdown_command = join(" ", compact([
     "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\sysprep.ps1",
     lower(var.cloudbase_init_username) != "administrator" ? "-DisableBuiltinAdmin" : "",
+    var.remote_local_admin ? "-AllowRemoteLocalAdmin" : "",
   ]))
   shutdown_timeout = "1h"
 

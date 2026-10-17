@@ -4,7 +4,7 @@
 # and chipset folders are used (the pack is mostly GPU drivers).
 #
 # Find newer packs in https://downloads.dell.com/catalog/DriverPackCatalog.cab
-# (see "Adding vendor drivers" in the README).
+# (see "Adding a variant" in the README).
 
 [variant]
 name = "dell-precision-7960-rack"

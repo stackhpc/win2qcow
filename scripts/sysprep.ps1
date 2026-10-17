@@ -10,13 +10,15 @@
 # then runs sysprep, which powers the VM off.
 param(
   [switch]$Generalize,
-  [switch]$DisableBuiltinAdmin
+  [switch]$DisableBuiltinAdmin,
+  [switch]$AllowRemoteLocalAdmin
 )
 
 if (-not $Generalize) {
   $ErrorActionPreference = 'Stop'
   $command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Generalize"
   if ($DisableBuiltinAdmin) { $command += ' -DisableBuiltinAdmin' }
+  if ($AllowRemoteLocalAdmin) { $command += ' -AllowRemoteLocalAdmin' }
   $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command }
   if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create failed with $($r.ReturnValue)" }
   Write-Host "Started sysprep (pid $($r.ProcessId)); it will power the VM off."
@@ -70,6 +72,16 @@ Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $false
 Set-Item WSMan:\localhost\Service\Auth\Basic -Value $false
 Remove-NetFirewallRule -Name 'packer-winrm-http' -ErrorAction SilentlyContinue
 Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
+
+# Enable-PSRemoting turned off UAC remote restrictions so local accounts get a
+# full admin token over the network. Restore them (as cloudbase-init intends)
+# unless the image is meant to be managed remotely as the local admin account.
+$system = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+if ($AllowRemoteLocalAdmin) {
+  Set-ItemProperty -Path $system -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord
+} else {
+  Remove-ItemProperty -Path $system -Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue
+}
 
 # The built-in Administrator has the build password: randomise it, and disable
 # it unless cloudbase-init manages that account.

@@ -4,7 +4,7 @@
 #   scripts/build-variant.sh dell-poweredge-r740xd -var iso_url=... -var iso_checksum=...
 #
 # Fetches and checks the variant's drivers into drivers/<variant>/, then runs
-# packer build with them. Extra arguments go to packer build. Uses .venv/ (see
+# packer build with them; the image goes to output-<variant>/ in the repo. Extra arguments go to packer build. Uses .venv/ (see
 # README) for Python if it exists.
 set -euo pipefail
 
@@ -21,12 +21,14 @@ fi
 python=${PYTHON:-python3}
 [ -x "$repo/.venv/bin/python" ] && python="$repo/.venv/bin/python"
 
-"$python" "$repo/scripts/drivers.py" fetch "$toml"
+drivers="$repo/drivers/$variant"
+"$python" "$repo/scripts/drivers.py" fetch "$toml" --output "$drivers"
 
-cd "$repo"
-packer init windows-11-ironic.pkr.hcl
+# No cd: relative paths in the arguments (e.g. -var iso_url=...) resolve
+# against the caller's directory. The template finds its own files itself.
+packer init "$repo/windows-11-ironic.pkr.hcl"
 packer build \
-  -var "vendor_drivers_dir=$repo/drivers/$variant" \
-  -var "output_directory=output-$variant" \
+  -var "vendor_drivers_dir=$drivers" \
+  -var "output_directory=$repo/output-$variant" \
   -var "vm_name=windows-11-$variant.qcow2" \
-  "$@" windows-11-ironic.pkr.hcl
+  "$@" "$repo/windows-11-ironic.pkr.hcl"
