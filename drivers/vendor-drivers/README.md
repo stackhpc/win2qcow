@@ -9,4 +9,4 @@ added to the Windows driver store. Check that Windows 11 accepts them with:
     .venv/bin/python scripts/drivers.py check-infs drivers/vendor-drivers
 
 The CD is written with Joliet names, which are limited to 64 characters per
-path component, so keep file and directory names short.
+name and 120 per path from the CD root, so keep names short.

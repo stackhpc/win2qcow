@@ -63,7 +63,7 @@ sha256 = "fb6f1c2a3c3b58ec51bca36d4f02c4964fb1662d2c822492425cfc29116af889"
 
 [[packages]]
 id = "intel-ixs"
-description = "Intel 82599/X540/X550 10GbE: 560SFP+, 560FLR-SFP+, 561T, 561FLR-T, 562T"
+description = "Intel X550 10GBASE-T: 562T"
 # cp067485: HPE Intel ixs Driver for Windows Server 2025, 4.2.7.0
 url = "https://downloads.hpe.com/pub/softlib2/software1/sc-windows/p778022694/v269635/cp067485.exe"
 sha256 = "724ad3e931ca6f99b489aeffe448d0555bb889a48e7ff423f9217310a63757c1"

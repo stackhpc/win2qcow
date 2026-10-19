@@ -244,7 +244,7 @@ Drivers are staged with `pnputil /add-driver`, not installed. That's enough
 for NICs and for storage that isn't the boot disk, but not for a boot
 controller with no inbox Windows 11 driver: staged drivers are installed when
 PnP finds the device, after the boot volume is needed. Packages marked
-`boot_critical` (PERC S140 and Smart Array S100i software RAID) go in
+`boot_critical` (Smart Array S100i software RAID) go in
 `$WinPEDriver$` on the build CD instead. Windows Setup injects drivers from
 that folder into the image during installation the way `dism /Add-Driver`
 does offline: a boot-start service plus the hardware IDs to bind at boot.
@@ -256,8 +256,11 @@ uses to bind a boot device it has never seen.
 Every model in a variant's `includes` shares one image. Drivers bind only to
 present hardware, so the cost of supporting more models is disk space, and
 operators get one Glance image per OS release instead of one per model. The
-build CD's 64-character Joliet limit is per path component, and the
-`<variant>/<package>/NN-<dir>` layout stays well under it.
+build CD's Joliet names are limited to 64 characters and paths to 120
+(xorriso leaves longer ones off the CD with only a warning), so `fetch`
+checks both. The `<variant>/<package>/NN-<dir>` layout fits, but with little
+room: the longest path in `dell-hpe-servers` is 113 characters, so long
+variant or package names can push it over.
 
 ## Scripts and templates
 
@@ -298,7 +301,7 @@ Standard library plus 7-Zip and `pymsi`. Subcommands:
   `includes` are merged, their packages going under a directory named after
   the included variant; an INF that two included variants both use is staged
   once. Output is deterministic. The fetch fails if a required package has no Windows 11
-  driver, if a path component is over the CD's 64-character limit, or if the
+  driver, if a name or path is over the CD's Joliet limits, or if the
   variant's `name` doesn't match its file name.
 * `coverage VARIANT.toml --inbox install.wim` checks each `[[devices]]`
   entry against inbox and staged drivers, and exits non-zero on a gap.
@@ -471,12 +474,12 @@ user-data script output.
 * **On the R740xd:** a deploy of an earlier image showed the black-screen
   problem. It was diagnosed with `collect-diagnostics.ps1` and a crash dump,
   then fixed by moving the build to audit mode.
-* **Boot-critical drivers:** QEMU can't present an S100i or S140 controller,
-  so the combined `dell-hpe-servers` image was checked offline instead: its
-  SYSTEM hive has the `SmartDQp`/`SmartDQa` (S100i) and
-  `bcraid511`/`bcraidf5` (S140) services with boot start type, and its driver
-  database maps those controllers' hardware IDs to the injected INFs. No
-  node has booted from either controller yet.
+* **Boot-critical drivers:** QEMU can't present an S100i controller, so the
+  combined `dell-hpe-servers` image was checked offline instead: its SYSTEM
+  hive has the `SmartDQp`/`SmartDQa` services with boot start type, and its
+  driver database maps the S100i hardware IDs to the injected INF. No node
+  has booted from an S100i yet. PERC S140 was dropped after review: its
+  driver also claims Dell NVMe drives by hardware ID.
 
 ## Changes from the original plan
 

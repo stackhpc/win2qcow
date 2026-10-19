@@ -13,7 +13,7 @@
 # Not listed because Windows 11 has an inbox driver (see [[devices]]):
 #   QLogic 57800/57810 (netevbda), Mellanox ConnectX-3/3 Pro (mlx4_bus), and
 #   every boot storage option except PERC S140 (PERC 9/10, HBA330, BOSS-S1
-#   AHCI, NVMe).
+#   AHCI, NVMe). PERC S140 is not supported: see the note above the HBA330.
 
 [variant]
 name = "dell-poweredge-r740xd"
@@ -108,15 +108,20 @@ description = "PERC 9 (SAS3108/3008): H330, H730, H730P, H830"
 url = "https://downloads.dell.com/FOLDER03940499M/11/SAS-RAID_Driver_T244W_WN64_6.604.06.00_A01_08.EXE"
 sha256 = "26e77253f65b8560fd36799094fcc1c15b2142d5ceb0565deed50c11dd2875a8"
 
-[[packages]]
-id = "perc-s140"
-description = "PERC S140 software RAID"
-# Dell 85R54 5.11.0.0003: Windows Server 2022 64bit driver for PERC S140 Controller
-url = "https://downloads.dell.com/FOLDER11422921M/1/SAS-RAID_Driver_85R54_WN64_5.11.0.0003_A00.EXE"
-sha256 = "aed7e43b8b1400dab9d96864a8b7978cd348fbd2755566c779b5b656bff4af5c"
-# No inbox driver: installed as a boot driver so the node can boot from an
-# S140 volume (see "Boot-critical drivers" in the README).
-boot_critical = true
+# PERC S140 software RAID is left out on purpose. Its driver (bcraid5.inf)
+# also lists Dell-branded NVMe drives by hardware ID, which outranks the inbox
+# stornvme driver, so it would take over every Dell NVMe drive, boot drive
+# included, whether or not S140 RAID is enabled. For nodes that boot from an
+# S140 volume, add it back as a boot-critical package and test a deploy on
+# that hardware:
+#
+#   [[packages]]
+#   id = "perc-s140"
+#   description = "PERC S140 software RAID"
+#   # Dell 85R54 5.11.0.0003: Windows Server 2022 64bit driver for PERC S140 Controller
+#   url = "https://downloads.dell.com/FOLDER11422921M/1/SAS-RAID_Driver_85R54_WN64_5.11.0.0003_A00.EXE"
+#   sha256 = "aed7e43b8b1400dab9d96864a8b7978cd348fbd2755566c779b5b656bff4af5c"
+#   boot_critical = true
 
 [[packages]]
 id = "hba330"
@@ -176,6 +181,10 @@ ids = ["PCI\\VEN_1000&DEV_005F"]
 [[devices]]
 name = "PERC H740P/H840 (SAS3508)"
 ids = ["PCI\\VEN_1000&DEV_0016"]
+[[devices]]
+name = "PERC S140 software RAID (C620 SATA/sSATA in RAID mode)"
+ids = ["PCI\\VEN_8086&DEV_A186&SUBSYS_07371028", "PCI\\VEN_8086&DEV_A1D6&SUBSYS_07371028", "PCI\\VEN_8086&DEV_A206&SUBSYS_07371028", "PCI\\VEN_8086&DEV_A256&SUBSYS_07371028"]
+required = false
 [[devices]]
 name = "HBA330 (SAS3008 IT)"
 ids = ["PCI\\VEN_1000&DEV_0097"]

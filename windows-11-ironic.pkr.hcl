@@ -104,6 +104,15 @@ variable "vendor_drivers_dir" {
   type        = string
   default     = ""
   description = "Directory of extracted vendor drivers (*.inf trees) for the bare-metal hardware, shipped to the VM on the build CD. Empty: drivers/vendor-drivers in this repo."
+
+  # cd_files copies "<dir>/*", and a glob that matches nothing is silently
+  # skipped, so a wrong or empty directory would build an image without drivers.
+  validation {
+    condition = var.vendor_drivers_dir == "" || try(length(setunion(
+      fileset(var.vendor_drivers_dir, "**/*.inf"), fileset(var.vendor_drivers_dir, "**/*.INF"),
+      fileset(var.vendor_drivers_dir, "**/*.Inf"))) > 0, false)
+    error_message = "The vendor_drivers_dir must contain at least one .inf file (run scripts/drivers.py fetch first)."
+  }
 }
 
 variable "virtio_win_guest_tools_url" {

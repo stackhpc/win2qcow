@@ -19,6 +19,9 @@ scripts/drivers.py                     Fetches, unpacks and checks a variant's d
 scripts/build-variant.sh               Fetch a variant's drivers, then packer build
 scripts/collect-diagnostics.ps1        Run on a deployed node to collect first-boot logs
 drivers/vendor-drivers/                Hand-extracted drivers, for builds without a variant
+design-notes.md                        Design decisions and how each script works
+TODO.md                                Known follow-up work
+LICENSE                                Apache License 2.0
 ```
 
 ## Build host requirements
@@ -199,9 +202,15 @@ the root of the build CD, and Windows Setup installs everything there into the
 image as a boot driver (service start type boot, ready for the hardware IDs in
 its INF), so the deployed node can boot from that controller.
 
-The included variants mark the two software RAID controllers this way: Dell
-PERC S140 and HPE Smart Array S100i. Everything else they can boot from has
-an inbox driver, which `coverage` shows.
+The DL360 Gen10 variant marks its Smart Array S100i software RAID driver
+this way. Everything else the included variants can boot from has an inbox
+driver, which `coverage` shows.
+
+Before marking a package boot-critical, check which hardware IDs its INF
+lists: a boot driver takes every device it matches by hardware ID, ahead of
+inbox drivers that only match by class. That is why the R740xd variant leaves
+out PERC S140: its driver also lists Dell-branded NVMe drives, so it would
+replace the inbox NVMe driver for every such drive, boot drive included.
 
 #### Checking coverage
 
@@ -232,10 +241,10 @@ Emulex LPe31000/32000 FC                   -                            emulex-f
 ...
 ```
 
-Every R740xd boot controller except PERC S140 software RAID (PERC 9/10,
-HBA330, BOSS-S1, NVMe) has a Windows 11 inbox driver. That matters because a
-driver staged into the image is installed too late to boot from; PERC S140 is
-handled as a [boot-critical driver](#boot-critical-drivers).
+Every R740xd boot controller (PERC 9/10, HBA330, BOSS-S1, NVMe) has a
+Windows 11 inbox driver. That matters because a driver staged into the image
+is installed too late to boot from. PERC S140 software RAID is listed as an
+optional device and isn't covered (see the comment in the variant file).
 
 #### Adding a variant
 
@@ -280,8 +289,8 @@ would accept, e.g. for drivers downloaded by hand.
 Every `.inf` under `vendor_drivers_dir` (default `drivers/vendor-drivers/`)
 is staged, so hand-extracted drivers can also go there. They must be 64-bit,
 accepted by Windows 11 (check with `drivers.py check-infs`) and
-Microsoft-signed. Keep path components under 64 characters: the build CD uses
-Joliet names.
+Microsoft-signed. Keep names under 64 characters and paths under 120: the
+build CD uses Joliet names, and longer ones are left off the CD.
 
 ### What the build does
 
@@ -396,6 +405,139 @@ If neither is set, cloudbase-init generates a random password. Without the
 Nova metadata service there is then no way to retrieve it, so set one
 explicitly when using config drive only.
 
+## Configuring nodes with user data
+
+cloudbase-init runs the instance's user data once per instance, as
+LocalSystem, on the boot after it sets the hostname (that reboot happens
+during the first boot), by which time the network, `Admin` and its password
+are set up. The first line chooses how it is run, and must be the very first
+bytes of the file: a UTF-8 byte order mark, which some Windows editors add,
+makes cloudbase-init log "Unsupported user_data format" and skip it.
+
+| First line | Run as |
+|---|---|
+| `#ps1_sysnative` or `#ps1` | 64-bit PowerShell script (`#ps1_x86` for 32-bit) |
+| `rem cmd` | `cmd.exe` batch script |
+| `#cloud-config` | YAML: the subset of cloud-init modules listed below |
+| `Content-Type: multipart/mixed` | Several of the above, run in order |
+
+Output and errors go to
+`C:\Program Files\Cloudbase Solutions\Cloudbase-Init\log\cloudbase-init.log`
+(and the node's serial console). A script's exit code can ask for a reboot:
+1001 reboots and doesn't run the script again, 1002 runs it again at the next
+boot without rebooting, and 1003 reboots and runs it again. Any other code
+ends it.
+
+User data is readable by anyone who can read the instance's metadata, so
+don't put long-lived secrets in it. cloudbase-init also accepts gzipped user
+data.
+
+### PowerShell
+
+`setup.ps1`:
+
+```powershell
+#ps1_sysnative
+# Runs once, as LocalSystem, after cloudbase-init has set the hostname,
+# network and the Admin account. Output goes to cloudbase-init's log.
+$ErrorActionPreference = 'Stop'
+
+# High performance power plan: no sleeping, no CPU parking.
+powercfg.exe /setactive SCHEME_MIN
+if ($LASTEXITCODE) { throw "powercfg failed: $LASTEXITCODE" }
+
+# Let monitoring ping the node. (Checked first so the script can be re-run.)
+if (-not (Get-NetFirewallRule -Name 'site-icmpv4-echo' -ErrorAction SilentlyContinue)) {
+  New-NetFirewallRule -Name 'site-icmpv4-echo' -DisplayName 'Allow ICMPv4 echo' `
+    -Protocol ICMPv4 -IcmpType 8 -Direction Inbound -Action Allow | Out-Null
+}
+
+# Software from an internal repository (example URL):
+# Invoke-WebRequest -Uri 'https://repo.example.com/agent.msi' -OutFile "$env:TEMP\agent.msi" -UseBasicParsing
+# Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\agent.msi`" /qn" -Wait
+
+New-Item -ItemType Directory -Path 'C:\ProgramData\Site' -Force | Out-Null
+Set-Content -Path 'C:\ProgramData\Site\deployed.txt' -Value "Deployed $(Get-Date -Format o) as $env:COMPUTERNAME"
+```
+
+With Nova:
+
+```bash
+openstack server create my-node \
+  --image windows-11-ironic --flavor <baremetal-flavor> --network <network> \
+  --config-drive true --property admin_pass='<password>' \
+  --user-data setup.ps1
+```
+
+With standalone Ironic, put the script in the config drive. cloudbase-init
+records what it has run against the `uuid`, so give each deployment a new one:
+
+```bash
+openstack baremetal node deploy <node> \
+  --config-drive "$(jq -n --rawfile ud setup.ps1 --arg uuid "$(uuidgen)" \
+      '{meta_data: {uuid: $uuid, hostname: "my-node", admin_pass: "<password>"}, user_data: $ud}')"
+```
+
+### cloud-config
+
+cloudbase-init supports these cloud-config keys on Windows: `write_files`,
+`timezone` (IANA names), `ntp`, `hostname`, `users`, `groups` and `runcmd`.
+They run in that fixed order, whatever the order in the file. `runcmd`
+entries are joined into one `cmd.exe` batch script, not run by a POSIX
+shell.
+
+`cloud-config.yaml`:
+
+```yaml
+#cloud-config
+timezone: Europe/London
+ntp:
+  enabled: true
+  servers:
+    - 0.uk.pool.ntp.org
+    - 1.uk.pool.ntp.org
+write_files:
+  - path: C:\ProgramData\Site\settings.json
+    content: |
+      {"environment": "production"}
+# runcmd entries run as one cmd.exe batch script.
+runcmd:
+  - reg add HKLM\SOFTWARE\Site /v Role /t REG_SZ /d compute /f
+  - netsh advfirewall firewall set rule group="Remote Desktop" new enable=yes
+```
+
+Pass it with `--user-data cloud-config.yaml` as above.
+
+### Both at once
+
+To use cloud-config and a PowerShell script together, combine them into a
+MIME multipart file. The parts run in order. A script part needs a file name:
+cloudbase-init skips a script part without one, and picks the interpreter
+from its extension (`.ps1` for 64-bit PowerShell, `.cmd` for `cmd.exe`).
+A part that exits 1001 or 1003 stops the parts after it for good, so put a
+script that asks for a reboot last. Set the time zone in one place only: after
+cloud-config `timezone` has run, cloudbase-init (1.1.8) has dropped the
+time-zone privilege, so `Set-TimeZone` in a later script part fails with "A
+required privilege is not held by the client".
+
+```bash
+python3 - <<'EOF'
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+msg = MIMEMultipart()
+msg.attach(MIMEText(open("cloud-config.yaml").read(), "cloud-config"))
+script = MIMEText(open("setup.ps1").read(), "x-shellscript")
+script.add_header("Content-Disposition", "attachment", filename="setup.ps1")
+msg.attach(script)
+open("user-data.mime", "w").write(msg.as_string())
+EOF
+openstack server create ... --user-data user-data.mime
+```
+
+Nova limits user data to 64 KB after base64 encoding, so about 48 KB of
+script, or more if gzipped. The limit doesn't apply to a standalone Ironic
+config drive. For anything larger, have the script download it.
+
 ## Secure Boot
 
 Secure Boot works on the bare-metal nodes; nothing in the image needs to
@@ -463,12 +605,54 @@ It doesn't collect passwords on purpose, but the cloudbase-init logs include
 the output of user-data scripts: check them before sharing if your user data
 handles secrets.
 
+## Licensing and redistribution
+
+This repository holds only scripts, templates and documentation. It contains
+no Windows media, drivers or other third-party binaries: the build downloads
+them from their publishers, pinned by URL and SHA-256. The repository is
+licensed under the [Apache License 2.0](LICENSE); that covers this code only,
+not anything the build downloads or the images it produces.
+
+* **Product keys.** The keys in `windows-11-ironic.pkr.hcl` are Microsoft's
+  public [KMS client keys (GVLKs)](https://learn.microsoft.com/en-us/windows-server/get-started/kms-client-activation-keys),
+  published for exactly this use. They don't license or activate Windows: a
+  node activates only against your organisation's KMS host or through
+  Active Directory-based activation. Set `product_key` to use a MAK instead.
+* **Built images are not redistributable.** An image contains Windows,
+  licensed under your agreement with Microsoft (images built from the
+  Evaluation ISO are licensed only for time-limited evaluation, not
+  production use). Windows alone makes an image non-redistributable. It also
+  contains cloudbase-init (Apache 2.0), the Red Hat-signed virtio-win guest
+  tools, and Dell and HPE driver packages, whose licences permit use but not
+  general redistribution. Keep images inside your organisation, e.g. as a
+  private (not public or shared) Glance image. If users from other
+  organisations can deploy it, as in a multi-tenant cloud, check Microsoft's
+  terms for hosting Windows client editions first.
+* **Dell packages on HPE servers.** The HPE variant takes the Emulex and
+  Intel X520/X540 drivers from Dell's packages, because HPE's are missing or
+  can't be unpacked. Dell's [EULA](https://www.dell.com/aeula) says to "run
+  the Software only on the hardware for which it was intended to operate,
+  when applicable". Third-party software in a Dell package is instead
+  governed by its own terms (section 5), but neither package gives you
+  separate rights: the Emulex package has no Broadcom licence, and the
+  Intel package carries an OEM licence that only takes effect under a
+  non-disclosure agreement with Intel. Using them on HPE servers may fall
+  outside Dell's terms, so before deploying on HPE nodes, replace both with
+  the drivers from Broadcom's and Intel's own download sites, or confirm the
+  terms with Dell (tracked in [TODO.md](TODO.md)).
+* **Build tools** are installed separately and not redistributed. They
+  include Packer (BUSL 1.1), its QEMU plugin (MPL 2.0), QEMU (GPL 2.0),
+  OVMF/EDK II (BSD-2-Clause-Patent), xorriso (GPL 3.0 or later), wimlib
+  (GPL 3.0 or later, or LGPL 3.0 or later), 7-Zip (LGPL 2.1 or later, with
+  BSD-licensed parts and the unRAR restriction), jq (MIT), and `pymsi` (MIT)
+  and `olefile` (BSD 2-clause) from PyPI.
+
 ## Limitations
 
 * **Boot-critical storage drivers are untested on hardware.** Booting from
-  PERC S140 or Smart Array S100i software RAID relies on the
+  Smart Array S100i software RAID relies on the
   [`boot_critical`](#boot-critical-drivers) install, which has been checked in
-  the image but not on a node. Intel VROC RAID on the Precision 7960 comes in
+  the image but not on a node. PERC S140 software RAID is not supported. Intel VROC RAID on the Precision 7960 comes in
   a driver pack that isn't marked boot-critical, so booting from it may fail
   with `INACCESSIBLE_BOOT_DEVICE`.
 * **Variant drivers are checked, not hardware-tested.** `fetch` checks that

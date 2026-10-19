@@ -445,7 +445,10 @@ def load_variant(path, _seen=()):
     packages = [dict(pkg, key=pkg["id"]) for pkg in data.get("packages", [])]
     devices = list(data.get("devices", []))
     for inc in data["variant"].get("includes", []):
-        sub_variant = load_variant(path.parent / f"{inc}.toml", (*_seen, path))
+        inc_path = path.parent / f"{inc}.toml"
+        if not inc_path.is_file():
+            raise SystemExit(f"{path.name}: included variant {inc!r} not found (expected {inc_path})")
+        sub_variant = load_variant(inc_path, (*_seen, path))
         packages += [dict(pkg, key=f"{inc}/{pkg['key']}") for pkg in sub_variant["packages"]]
         devices += [dict(dev, name=f"{inc}: {dev['name']}") for dev in sub_variant["devices"]]
     keys = [pkg["key"] for pkg in packages]
@@ -465,7 +468,7 @@ def cmd_fetch(args):
     report = [f"# Drivers for {name}", "", variant["variant"].get("description", ""), "",
               f"Checked against Windows 11 build {TARGET_BUILD}, x64, client.", ""]
     manifest, failures = [], []
-    staged = {}  # (package sha256, INF path in package) -> package key
+    staged = {}  # (package sha256, INF path in package, boot-critical) -> package key
     for pkg in variant["packages"]:
         pid = pkg["key"]
         # Boot-critical drivers (storage controllers the node may boot from
@@ -473,8 +476,9 @@ def cmd_fetch(args):
         # drivers; everything else is staged after installation.
         base = out / BOOT_DIR if pkg.get("boot_critical") else out
         print(f"==> {pid}: {pkg['url'].rsplit('/', 1)[-1]}", flush=True)
-        src = download(pkg["url"], pkg["sha256"].lower(), cache / "downloads")
-        work = cache / "extract" / f"{pkg['sha256'][:16]}-v{UNPACK_VERSION}"
+        sha256 = pkg["sha256"].lower()
+        src = download(pkg["url"], sha256, cache / "downloads")
+        work = cache / "extract" / f"{sha256[:16]}-v{UNPACK_VERSION}"
         if not (work / ".done").exists():
             shutil.rmtree(work, ignore_errors=True)
             if not unpack(src, work / "root"):
@@ -486,13 +490,14 @@ def cmd_fetch(args):
         infs = [p for p in infs if any(fnmatch.fnmatch(str(p.relative_to(root)), g) for g in inc)
                 and not any(fnmatch.fnmatch(str(p.relative_to(root)), g) for g in exc)]
         infos = [analyse_inf(p) for p in infs]
-        # Included variants can share a package: stage each INF once.
+        # Included variants can share a package: stage each INF once (but a
+        # boot-critical copy is never a duplicate of a staged-only one).
         for i in infos:
-            first = staged.get((pkg["sha256"], i["path"]))
-            if i["applies"] and first:
-                i.update(applies=False, reason=f"already staged by {first}")
+            key = (sha256, i["path"], bool(pkg.get("boot_critical")))
+            if i["applies"] and key in staged:
+                i.update(applies=False, reason=f"already staged by {staged[key]}")
             elif i["applies"]:
-                staged[(pkg["sha256"], i["path"])] = pid
+                staged[key] = pid
         applicable = [i for i in infos if i["applies"]]
         keep = {pathlib.Path(i["path"]) for i in applicable}
         for i, d in enumerate(select_driver_dirs(infos)):
@@ -519,10 +524,13 @@ def cmd_fetch(args):
         print(f"    {len(applicable)}/{len(infos)} INFs apply to Windows 11, {len(hwids)} hardware IDs")
         if pkg.get("required", True) and not any(i["applies"] or i["reason"].startswith("already staged") for i in infos):
             failures.append(f"no Windows 11 driver in required package {pid}")
-    # The build CD uses Joliet names, limited to 64 characters per path component.
-    too_long = [str(p.relative_to(out)) for p in out.rglob("*") if len(p.name) > 64]
+    # The build CD uses Joliet names: xorriso leaves out (with only a warning)
+    # any name over 64 characters or path over 120 characters from the CD root.
+    too_long = [str(p.relative_to(out)) for p in out.rglob("*")
+                if len(p.name) > 64 or len(str(p.relative_to(out))) > 120]
     if too_long:
-        failures.append("path components over 64 characters (Joliet limit): " + ", ".join(too_long[:5]))
+        failures.append("paths too long for the build CD (Joliet: 64-character names, "
+                        "120-character paths): " + ", ".join(too_long[:5]))
     (out / "REPORT.md").write_text("\n".join(report) + "\n")
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())

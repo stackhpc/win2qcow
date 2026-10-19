@@ -12,19 +12,19 @@ if (-not $cd) {
 }
 
 $root = "$($cd.DriveLetter):\"
-$infs = @(Get-ChildItem -Path $root -Recurse -Filter *.inf -File)
+# -Filter also matches 8.3 short names (e.g. foo.inf_), so check the extension.
+$infs = @(Get-ChildItem -Path $root -Recurse -Filter *.inf -File | Where-Object Extension -eq '.inf')
 
 # A variant build (scripts/drivers.py) puts manifest.json on the CD and has
 # already dropped every INF Windows 11 would reject, so any failure here is a
 # real problem: fail the build. Hand-placed drivers are only warned about.
-$manifests = @(Get-ChildItem -Path $root -Recurse -Filter manifest.json -File)
-$strict = $manifests.Count -gt 0
+# Only the CD root's manifest counts: vendor payloads may have their own.
+$manifest = Join-Path $root 'manifest.json'
+$strict = Test-Path -Path $manifest -PathType Leaf
 if ($strict) {
   $expected = 0
-  foreach ($m in $manifests) {
-    $packages = Get-Content $m.FullName -Raw | ConvertFrom-Json
-    foreach ($pkg in $packages) { foreach ($i in $pkg.infs) { if ($i.applies) { $expected++ } } }
-  }
+  $packages = Get-Content $manifest -Raw | ConvertFrom-Json
+  foreach ($pkg in $packages) { foreach ($i in $pkg.infs) { if ($i.applies) { $expected++ } } }
   if ($infs.Count -ne $expected) {
     throw "Build CD has $($infs.Count) INFs but the variant manifest lists ${expected}: files were lost or renamed on the CD."
   }
