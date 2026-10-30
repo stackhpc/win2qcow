@@ -664,8 +664,10 @@ tests/vm/bitlocker-test.sh output-dell-hpe-servers-bitlocker/windows-11-dell-hpe
 The results and screenshots are in `.cache/vmtest/`. Each script's header
 explains it. Besides QEMU/KVM and OVMF, the tests need `swtpm`, `xorriso`,
 `sgdisk` and `qemu-nbd` (the last two for partition config drives, with
-sudo). `.claude/skills/vm-test/SKILL.md` has notes for running them from
-Claude Code.
+sudo). `.agents/skills/vm-test/SKILL.md` has notes for coding agents on
+running them and reading the results. Claude Code only reads
+`.claude/skills/`, so each skill there is a symlink into `.agents/skills/`;
+add one when you add a skill.
 
 ## Validating a deployment
 
