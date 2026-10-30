@@ -19,6 +19,7 @@ scripts/drivers.py                     Fetches, unpacks and checks a variant's d
 scripts/build-variant.sh               Fetch a variant's drivers, then packer build
 scripts/collect-diagnostics.ps1        Run on a deployed node to collect first-boot logs
 drivers/vendor-drivers/                Hand-extracted drivers, for builds without a variant
+tests/vm/                              Deploy-and-check tests in local QEMU VMs
 design-notes.md                        Design decisions and how each script works
 TODO.md                                Known follow-up work
 LICENSE                                Apache License 2.0
@@ -70,6 +71,9 @@ packer build \
   shares). By default UAC remote restrictions stay on, as cloudbase-init
   intends: RDP works, but remote admin needs a domain account. Set it to
   `true` for nodes you manage over WinRM as `Admin`.
+* `bitlocker` (default `false`) builds an image that requires a TPM 2.0 and
+  encrypts C: with BitLocker on each node's first boot; see
+  [BitLocker and the TPM](#bitlocker-and-the-tpm).
 * To include drivers for specific hardware, build a variant with
   `scripts/build-variant.sh` instead; see [Hardware variants](#hardware-variants).
 * To watch the install, run with `-var headless=false`, or connect a VNC
@@ -571,7 +575,97 @@ Caveats:
   managers.
 * Device encryption is blocked (`PreventDeviceEncryption`), so a TPM on the
   node does not cause Windows to silently BitLocker the disk. Enable BitLocker
-  deliberately if you need it.
+  deliberately if you need it (see [BitLocker and the TPM](#bitlocker-and-the-tpm)).
+
+## BitLocker and the TPM
+
+By default the image needs no TPM: Windows 11 only checks for one during
+Setup, which the build skips. Build with `-var bitlocker=true` to get an
+image that requires a TPM 2.0 and encrypts C: on each deployed node:
+
+```bash
+scripts/build-variant.sh dell-hpe-servers \
+  -var iso_url=/path/to/windows-11-enterprise.iso \
+  -var iso_checksum=sha256:<sha256 of the ISO> \
+  -var 'image_name=Windows 11 Enterprise' \
+  -var bitlocker=true \
+  -var output_directory=$PWD/output-dell-hpe-servers-bitlocker \
+  -var vm_name=windows-11-dell-hpe-servers-bitlocker.qcow2
+```
+
+Encryption can't happen in the image itself: sysprep can't generalize an
+encrypted disk, and the key must be sealed to each node's own TPM. Instead
+the build installs `scripts/enable-bitlocker.ps1`, which cloudbase-init runs
+from its LocalScripts folder after the user data, on the boot after the
+hostname is set. It:
+
+1. checks for a TPM 2.0 that is present and ready. If there isn't one, it
+   records a failure and runs again at every boot, so turning the TPM on in
+   the firmware later is enough;
+2. adds a recovery password, then turns on BitLocker for C: with a TPM
+   protector (XTS-AES 256), and reboots;
+3. on the next boot, which the TPM has unlocked without a recovery prompt,
+   waits for encryption to finish and records the result. cloudbase-init
+   waits for it, which takes minutes.
+
+Any error is recorded and the script runs again at the next boot, rather
+than giving up. Only used space is encrypted, which is quick on a new node;
+free space that held data before the deploy isn't.
+
+The result goes to `C:\ProgramData\BitLocker\status.txt`, the Application
+event log (source `BitLockerSetup`: event 100 when encryption starts, 101
+when it has finished, 300 for no usable TPM, 301 for an unexpected volume
+state, 302 for any other error) and cloudbase-init's log, which is also on
+the serial console. The recovery password is never written to these, and the
+status includes the PCRs the TPM protector is sealed to. To check a node by
+hand:
+
+```powershell
+Get-Content C:\ProgramData\BitLocker\status.txt
+Get-Tpm
+manage-bde -status C:
+```
+
+On the bare-metal nodes the TPM is an optional module on both the R740xd
+and DL360 Gen10, so check one is fitted. Turn it on in the BIOS (Dell: System
+BIOS, System Security, TPM Security; HPE: System Utilities, Server Security,
+Trusted Platform Module Options) in TPM 2.0 mode. With Secure Boot on,
+Windows can seal the key to the Secure Boot state (PCRs 7 and 11) instead of
+firmware measurements (PCRs 0, 2, 4 and 11), but only when nothing in the
+boot path is signed with Microsoft's third-party UEFI CA, which RAID and NIC
+option ROMs often are. The status file shows which profile a node got.
+Suspend BitLocker before a firmware update either way:
+
+```powershell
+Suspend-BitLocker -MountPoint C: -RebootCount 1
+```
+
+**The recovery password.** The script saves it to
+`C:\ProgramData\BitLocker\recovery.txt` (Administrators only). That proves
+it exists, but it is on the encrypted disk, so it is no use if the TPM stops
+releasing the key. Before relying on this outside testing, escrow it: back it
+up to Active Directory with `Backup-BitLockerKeyProtector` on domain-joined
+nodes, or copy it to your secrets store. Deploying overwrites the whole
+disk, so redeploying an encrypted node needs no key.
+
+## Testing an image in a local VM
+
+`tests/vm/` deploys a built image to a QEMU VM the way Ironic would: a fresh
+overlay disk and UEFI variables, Secure Boot, and an OpenStack config drive
+on a CD or in a partition at the end of the disk. It optionally adds a TPM
+2.0 (swtpm). State goes in `.cache/vmtest/`.
+
+```bash
+python3 -m venv .cache/vmtest/venv && .cache/vmtest/venv/bin/pip install pillow   # for screenshots
+tests/vm/deploy-test.sh output-dell-hpe-servers/windows-11-dell-hpe-servers.qcow2 partition setup.ps1
+tests/vm/bitlocker-test.sh output-dell-hpe-servers-bitlocker/windows-11-dell-hpe-servers-bitlocker.qcow2
+```
+
+The results and screenshots are in `.cache/vmtest/`. Each script's header
+explains it. Besides QEMU/KVM and OVMF, the tests need `swtpm`, `xorriso`,
+`sgdisk` and `qemu-nbd` (the last two for partition config drives, with
+sudo). `.claude/skills/vm-test/SKILL.md` has notes for running them from
+Claude Code.
 
 ## Validating a deployment
 

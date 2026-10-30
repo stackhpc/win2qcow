@@ -77,6 +77,16 @@ Save 'devices.txt' {
   'Network and storage devices:'
   Get-PnpDevice -Class Net, SCSIAdapter, HDC -ErrorAction SilentlyContinue | Format-Table Status, Class, FriendlyName, InstanceId -AutoSize
 }
+Save 'tpm-bitlocker.txt' {
+  Get-Tpm | Format-List
+  Get-CimInstance -Namespace root\cimv2\Security\MicrosoftTpm -ClassName Win32_Tpm -ErrorAction SilentlyContinue | Format-List SpecVersion, ManufacturerIdTxt
+  try { "Secure Boot: $(Confirm-SecureBootUEFI)" } catch { "Secure Boot: $_" }
+  # Key protector types and IDs only: never the recovery password.
+  Get-BitLockerVolume | Format-List MountPoint, VolumeStatus, ProtectionStatus, EncryptionPercentage, EncryptionMethod,
+    @{ Name = 'KeyProtectors'; Expression = { ($_.KeyProtector | ForEach-Object { "$($_.KeyProtectorType) $($_.KeyProtectorId)" }) -join '; ' } }
+  $status = Join-Path $env:ProgramData 'BitLocker\status.txt'
+  if (Test-Path $status) { 'status.txt (bitlocker=true images):'; Get-Content $status }
+}
 Save 'drivers.txt' { Get-WindowsDriver -Online | Sort-Object OriginalFileName | Format-Table OriginalFileName, ProviderName, Version, ClassName -AutoSize }
 
 # Event logs from the last 3 days.

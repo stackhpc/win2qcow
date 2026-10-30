@@ -7,8 +7,9 @@ Set-ItemProperty -Path "$ts\WinStations\RDP-Tcp" -Name UserAuthentication -Value
 Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'
 
 # Stop Windows 11 turning on BitLocker device encryption by itself on nodes
-# that have a TPM. Ironic would then be unable to recover or re-image them
-# cleanly, and nobody would hold the recovery key.
+# that have a TPM: nobody would hold the recovery key, so a node that lands
+# on the recovery screen (e.g. after a firmware change) could only be
+# redeployed. Deliberate BitLocker is the bitlocker build option instead.
 # (New-Item -Force on an existing registry key deletes and recreates it.)
 $bitlocker = 'HKLM:\SYSTEM\CurrentControlSet\Control\BitLocker'
 if (-not (Test-Path $bitlocker)) { New-Item -Path $bitlocker | Out-Null }

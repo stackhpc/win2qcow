@@ -35,6 +35,7 @@ to use it; this document covers how it works.
 | `templates/sysprep-unattend.xml.pkrtpl` | Deployed node | Answer file for the node's first boot |
 | `templates/cloudbase-init*.conf.pkrtpl` | Deployed node | cloudbase-init config, specialize stage and service |
 | `files/SetupComplete.cmd` | Deployed node | Enables the cloudbase-init service after OOBE |
+| `scripts/enable-bitlocker.ps1` | Deployed node | With `bitlocker=true`: requires a TPM 2.0 and encrypts C: |
 | `scripts/collect-diagnostics.ps1` | Deployed node | Gathers first-boot logs when something goes wrong |
 
 ## Build sequence
@@ -107,6 +108,10 @@ sequenceDiagram
     CBS->>CBS: set hostname, reboot
     CBS->>CD: read metadata (after reboot)
     CBS->>CBS: network_data.json, Admin password, WinRM HTTPS listener, user data
+    opt bitlocker=true
+        CBS->>CBS: enable-bitlocker.ps1: check TPM 2.0, encrypt C: (TPM protector), reboot
+        CBS->>CBS: after reboot (TPM unlocked C:): wait for encryption, record status
+    end
     User->>WS: sign in as Admin (console, RDP or WinRM HTTPS)
 ```
 
@@ -218,12 +223,48 @@ randomised and disabled.
 
 * **BitLocker device encryption** (`PreventDeviceEncryption`): Windows 11
   can otherwise encrypt a node with a TPM by itself, leaving nobody with the
-  recovery key.
+  recovery key. Deliberate BitLocker is a build option instead (see below).
 * **Smart App Control:** it starts in evaluation mode and can switch itself
   on and block unsigned code such as user-data scripts.
 * **Store and Windows Update during the build**: Store app updates make
   Windows 11 sysprep fail. Both policies are removed before sysprep, except
   "consumer features", which stays off on nodes.
+
+### BitLocker as a first-boot step
+
+`bitlocker=true` gives an image that requires a TPM 2.0 and encrypts C:.
+None of it can happen during the build: sysprep can't generalize an
+encrypted volume, and the volume key has to be sealed to each node's own
+TPM. So the image only carries `enable-bitlocker.ps1`, which cloudbase-init
+runs from its LocalScripts folder on the node.
+
+* **Where it runs.** LocalScripts runs after user data, so user data can
+  prepare the node first. cloudbase-init's exit codes give the flow: 1002
+  ("run again next boot") while there is no usable TPM or after any error,
+  1003 ("reboot and run again") once encryption starts, 0 when done. Any
+  other code would make cloudbase-init stop running the script for good, so
+  every error is caught and turned into 1002. Each run works from the
+  volume's current state (decrypted, encrypting, suspended), so a run cut
+  short by an error picks up where it left off.
+* **Proving the TPM works.** The reboot after enabling is the test: the next
+  boot only reaches cloudbase-init if the TPM released the key without a
+  recovery prompt. The script then waits for encryption to finish and
+  records the result in a file, the event log and cloudbase-init's log
+  (and so the serial console).
+* **"Requires" a TPM** means encryption is withheld and a failure is
+  recorded at every boot until a ready TPM 2.0 appears. The node still boots
+  and can be used, so a TPM turned off in the firmware is fixable without
+  redeploying.
+* **Recovery password.** A recovery password protector is added before the
+  TPM protector, so the volume is never sealed to the TPM alone. It is
+  saved on the node for testing; escrowing it (Active Directory, a secrets
+  store) is left to the deployment, because that depends on the site. The
+  BitLocker cmdlets print the password in a warning, and cloudbase-init logs
+  script output to a file Users can read and to the serial console, so the
+  script discards warnings and never prints the password.
+* **Automatic device encryption stays blocked**: it would encrypt with no
+  recovery key anyone holds. `PreventDeviceEncryption` doesn't stop
+  `Enable-BitLocker`.
 
 ### Hardware variants and drivers
 
@@ -330,7 +371,7 @@ Packer template:
 * the `shutdown_command`.
 
 Variables cover the ISO, image name, locales, sizes, pinned download URLs and
-hashes, the cloudbase-init user name and `remote_local_admin`.
+hashes, the cloudbase-init user name, `remote_local_admin` and `bitlocker`.
 `product_key` defaults to the public KMS client key for the edition in
 `image_name`, or to none for evaluation media.
 
@@ -446,11 +487,24 @@ injected password.
 Run by Windows once after OOBE. Switches the cloudbase-init service to
 Automatic and starts it.
 
+**`scripts/enable-bitlocker.ps1`**
+Installed in cloudbase-init's LocalScripts folder only when `bitlocker=true`.
+It checks for a ready TPM 2.0, adds a recovery password and a TPM protector
+to C:, turns on BitLocker (XTS-AES 256, used space only, no hardware-test
+reboot) and asks cloudbase-init to reboot. On the next boot it waits for
+encryption to finish and writes the result to
+`C:\ProgramData\BitLocker\status.txt` and the Application event log
+(source `BitLockerSetup`, events 100, 101 and 300–302), including the PCR
+profile the TPM protector is sealed to. Without a usable TPM, or after any
+error, it records a failure and runs again at every boot.
+
 **`scripts/collect-diagnostics.ps1`**
 Run by hand on a node that misbehaves. Zips:
 
 * Setup, sysprep and cloudbase-init logs;
 * setup state, accounts, disks, network and devices without drivers;
+* TPM, Secure Boot and BitLocker state (protector IDs, never the recovery
+  password);
 * a metadata-service reachability check;
 * the last three days of event logs.
 

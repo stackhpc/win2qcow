@@ -108,9 +108,7 @@ variable "vendor_drivers_dir" {
   # cd_files copies "<dir>/*", and a glob that matches nothing is silently
   # skipped, so a wrong or empty directory would build an image without drivers.
   validation {
-    condition = var.vendor_drivers_dir == "" || try(length(setunion(
-      fileset(var.vendor_drivers_dir, "**/*.inf"), fileset(var.vendor_drivers_dir, "**/*.INF"),
-      fileset(var.vendor_drivers_dir, "**/*.Inf"))) > 0, false)
+    condition     = var.vendor_drivers_dir == "" || try(length(fileset(var.vendor_drivers_dir, "**/*.[iI][nN][fF]")) > 0, false)
     error_message = "The vendor_drivers_dir must contain at least one .inf file (run scripts/drivers.py fetch first)."
   }
 }
@@ -141,6 +139,12 @@ variable "remote_local_admin" {
   type        = bool
   default     = false
   description = "Let the local admin account manage nodes remotely (WinRM/Ansible, admin shares) with a full token, by turning off UAC remote restrictions (LocalAccountTokenFilterPolicy=1). Off: remote admin needs a domain account; RDP works either way."
+}
+
+variable "bitlocker" {
+  type        = bool
+  default     = false
+  description = "Require a TPM 2.0 on deployed nodes and encrypt C: with BitLocker (TPM protector plus a recovery password) on first boot. See \"BitLocker and the TPM\" in the README."
 }
 
 variable "cloudbase_init_username" {
@@ -340,6 +344,30 @@ build {
       install_dir = local.cloudbase_init_dir
     }))
     destination = "${local.cloudbase_init_dir}\\conf\\Unattend.xml"
+  }
+
+  # bitlocker=true: cloudbase-init runs this from LocalScripts on the deployed
+  # node. Uploaded either way (provisioners can't be conditional) and removed
+  # again when not wanted.
+  provisioner "file" {
+    source      = "${path.root}/scripts/enable-bitlocker.ps1"
+    destination = "C:\\Windows\\Temp\\enable-bitlocker.ps1"
+  }
+
+  provisioner "powershell" {
+    environment_vars = ["BITLOCKER=${var.bitlocker}", "LOCAL_SCRIPTS=${local.cloudbase_init_dir}\\LocalScripts"]
+    inline = [
+      "$ErrorActionPreference = 'Stop'",
+      "$src = 'C:\\Windows\\Temp\\enable-bitlocker.ps1'",
+      "if ($env:BITLOCKER -eq 'true') {",
+      "  New-Item -ItemType Directory -Path $env:LOCAL_SCRIPTS -Force | Out-Null",
+      "  Move-Item -Path $src -Destination $env:LOCAL_SCRIPTS -Force",
+      "  if (-not (Test-Path (Join-Path $env:LOCAL_SCRIPTS 'enable-bitlocker.ps1'))) { throw 'enable-bitlocker.ps1 was not installed' }",
+      "  Write-Host \"BitLocker first-boot script installed in $env:LOCAL_SCRIPTS\"",
+      "} else {",
+      "  Remove-Item -Path $src -Force",
+      "}",
+    ]
   }
 
   # Runs once on the deployed node after OOBE: enables the cloudbase-init service.
